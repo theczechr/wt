@@ -3,3 +3,11 @@
 .superpowers/
 .claude/worktrees/
 .worktrees/
+
+# Local-only tests: exercise your real machine (your worktrees, your Claude
+# sessions, your config) without shipping them. Go compiles them like any
+# other test, so they run in `go test ./...` here and are invisible to
+# everyone else. Keep them self-contained -- a committed test must never
+# depend on a helper defined in one of these files, or you break the build
+# for every other clone.
+*_local_test.go
