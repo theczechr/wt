@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -102,6 +103,26 @@ func SamePath(primary, target string) bool {
 	return samePath(primary, target)
 }
 
+// trackedInGit reports whether name is a path tracked by the git worktree at
+// dir. It exists because a tracked env file is a fundamentally different
+// thing from a hand-placed one: git checks it out into every new worktree,
+// so LinkEnv finds a real file at dst on a completely routine bootstrap.
+// Refusing that entry is right (a symlink over a tracked file leaves the
+// worktree permanently dirty with a type change), but reporting it as an
+// error is not -- nothing is wrong, git simply already supplied the file.
+//
+// The polarity here follows the package invariant in discover/worktree.go:
+// only a positive, unambiguous "yes, tracked" answer downgrades the entry to
+// a silent skip. Any error -- git missing, not a repo, a timeout, an exit
+// code that is not the documented 0/1 -- returns false, which routes the
+// entry back to the refusal path that never deletes anything. Unknown must
+// never be reported as safe, and here "safe" is the branch that stays quiet.
+func trackedInGit(dir, name string) bool {
+	cmd := exec.Command("git", "--no-optional-locks", "-C", dir,
+		"ls-files", "--error-unmatch", "--", name)
+	return cmd.Run() == nil
+}
+
 // LinkEnv symlinks each configured env file from the primary checkout into the
 // target worktree, so a rotated credential propagates instead of going stale.
 // Files listed in Copy are copied instead, for branches that must diverge.
@@ -188,7 +209,22 @@ func LinkEnv(primary, target string, r config.Repo) []error {
 			}
 		case statErr == nil && !isCopy:
 			// A real file sits at dst and this is a symlink entry: never
-			// destroy it. Report and move on.
+			// destroy it. Two reasons a file can be here, and they deserve
+			// different reports.
+			//
+			// If git tracks it, git put it there -- every fresh worktree
+			// gets it checked out, so this fires on a completely routine
+			// bootstrap. Skip silently: the file the config asked for is
+			// already present, which is the outcome the entry wanted.
+			// (.env.test in this repo is exactly this case, and treating it
+			// as an error aborted bootstrap before the submodule stage,
+			// leaving worktrees that could not run.)
+			//
+			// Otherwise it is a real file somebody placed by hand, and the
+			// refusal stands.
+			if trackedInGit(target, name) {
+				continue
+			}
 			errs = append(errs, fmt.Errorf("%s: a real file already exists at %s; refusing to delete it (bootstrap does not overwrite real files)", name, dst))
 			continue
 		case statErr != nil && !os.IsNotExist(statErr):
@@ -246,13 +282,34 @@ func Submodules(ctx context.Context, target string, r config.Repo) error {
 }
 
 // Run performs the whole bootstrap: env files, submodules, post-create hooks.
+//
+// The three stages are independent, so a failure in one does not skip the
+// others: every stage runs, and their errors are reported together. This is
+// deliberate. Aborting at the first env error once left a worktree with its
+// env files in place but its submodule uninitialised -- a checkout that
+// cannot build, produced by the very tool whose purpose is to prevent that.
+// A partial bootstrap is worth strictly more than an abandoned one, provided
+// the caller is told exactly which parts did not happen.
+//
+// post_create is the one stage gated on its predecessors: it runs commands
+// like `deno install` that assume env files and submodules are already
+// there, so running it over a half-prepared worktree invites a confusing
+// second failure on top of the real one. It is skipped, and said to be
+// skipped, when an earlier stage failed.
 func Run(ctx context.Context, primary, target string, r config.Repo) error {
-	if errs := LinkEnv(primary, target, r); len(errs) > 0 {
-		return fmt.Errorf("env: %v", errs)
-	}
+	var errs []error
+	errs = append(errs, LinkEnv(primary, target, r)...)
 	if err := Submodules(ctx, target, r); err != nil {
-		return err
+		errs = append(errs, err)
 	}
+
+	if len(errs) > 0 {
+		if len(r.PostCreate) > 0 {
+			errs = append(errs, fmt.Errorf("post_create skipped: an earlier stage failed"))
+		}
+		return errors.Join(errs...)
+	}
+
 	for _, c := range r.PostCreate {
 		cmd := exec.CommandContext(ctx, "sh", "-c", c)
 		cmd.Dir = target
