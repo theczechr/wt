@@ -51,6 +51,10 @@ type Config struct {
 	// entry survives before being purged on the next launch. See
 	// EffectiveTrashRetention.
 	TrashRetentionDays int `toml:"trash_retention_days"`
+
+	// HerdrStartupDashboard controls whether the dashboard opens by itself
+	// when herdr starts. See EffectiveHerdrStartupDashboard.
+	HerdrStartupDashboard string `toml:"herdr_startup_dashboard"`
 }
 
 // defaultTrashRetentionDays applies whenever trash_retention_days is absent
@@ -78,6 +82,39 @@ func (c Config) EffectiveTrashRetention() time.Duration {
 		days = defaultTrashRetentionDays
 	}
 	return time.Duration(days) * 24 * time.Hour
+}
+
+// Startup-dashboard modes for herdr_startup_dashboard.
+const (
+	// StartupAuto opens the dashboard only when herdr has nothing else to
+	// show. See EffectiveHerdrStartupDashboard.
+	StartupAuto = "auto"
+	// StartupAlways opens it on every herdr start.
+	StartupAlways = "always"
+	// StartupNever disables it.
+	StartupNever = "never"
+)
+
+// EffectiveHerdrStartupDashboard returns the startup-dashboard mode, one of
+// "auto" (default), "always" or "never".
+//
+// "auto" exists because herdr is not an empty editor. LazyVim shows its
+// dashboard when nvim opens with no file, which is nearly always; herdr
+// restores your previous session before any startup hook runs, so it usually
+// opens with agents already working. Popping an overlay over that on every
+// start -- including every `herdr update --handoff` -- would be noise, so
+// auto shows the dashboard only when there is nothing running to interrupt.
+//
+// An unrecognised value falls back to "auto" rather than failing: this is a
+// convenience, and a typo in it must not stop wt from loading a config whose
+// remaining keys govern worktree deletion.
+func (c Config) EffectiveHerdrStartupDashboard() string {
+	switch c.HerdrStartupDashboard {
+	case StartupAlways, StartupNever:
+		return c.HerdrStartupDashboard
+	default:
+		return StartupAuto
+	}
 }
 
 // EphemeralDirOrDefault is the directory, relative to the primary checkout,

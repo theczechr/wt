@@ -65,3 +65,20 @@ title = "Worktrees"
 description = "Open the wt dashboard as an overlay"
 contexts = ["global"]
 command = ["sh", "-c", '"$HERDR_BIN_PATH" plugin pane open --plugin theczechr.wt --entrypoint dashboard --placement overlay']
+
+# Open the dashboard by itself when herdr starts -- the LazyVim landing
+# screen, adapted to a multiplexer.
+#
+# The adaptation matters. LazyVim shows its dashboard whenever nvim opens
+# without a file, because an editor starts empty. herdr does not: startup
+# hooks run AFTER it restores the previous session, so it usually comes up
+# with agents already working, and an overlay dropped across that on every
+# start -- including every `herdr update --handoff`, which re-runs startup
+# hooks -- would be noise.
+#
+# So the default is conditional: open the dashboard only when no agent is
+# running, which is exactly when a launcher is what you wanted. Set
+# herdr_startup_dashboard = "always" or "never" in wt's own config to
+# override.
+[[startup]]
+command = ["wt", "hook", "herdr-startup"]

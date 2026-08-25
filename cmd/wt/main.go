@@ -102,12 +102,14 @@ func main() {
 		// Plugin/hook entrypoints, dispatched by name so one reserved word
 		// covers every integration rather than one per host tool.
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: wt hook herdr-worktree-created")
+			fmt.Fprintln(os.Stderr, "usage: wt hook herdr-worktree-created|herdr-startup")
 			os.Exit(2)
 		}
 		switch os.Args[2] {
 		case "herdr-worktree-created":
 			herdrWorktreeCreated(cfg)
+		case "herdr-startup":
+			herdrStartup(cfg)
 		default:
 			fmt.Fprintf(os.Stderr, "wt: hook: unknown hook %q\n", os.Args[2])
 			os.Exit(2)
@@ -495,6 +497,56 @@ func repoNames(primaries map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// pluginID and dashboardEntrypoint mirror herdr-plugin.toml. They are
+// constants rather than config because they name entries in a manifest that
+// ships in this repo: if either drifts, the manifest is wrong, not the
+// user's setup.
+const (
+	pluginID            = "theczechr.wt"
+	dashboardEntrypoint = "dashboard"
+)
+
+// herdrStartup is herdr's [[startup]] hook: it decides whether to open the
+// dashboard by itself when herdr starts.
+//
+// The "auto" default is the interesting part. LazyVim shows its dashboard
+// whenever nvim opens without a file, which is almost always, because an
+// editor starts empty. herdr does not: startup hooks run AFTER it restores
+// the previous session, so it usually comes up with agents already working.
+// Opening an overlay across that on every start -- and every
+// `herdr update --handoff`, which re-runs startup hooks -- would be noise.
+// So auto opens the dashboard only when no agent is running, which is when
+// a launcher is what the user actually wanted.
+//
+// Failures are reported and swallowed. herdr documents that a startup
+// failure does not stop the server, and a dashboard that did not appear must
+// never be the reason a session fails to come up.
+func herdrStartup(cfg config.Config) {
+	mode := cfg.EffectiveHerdrStartupDashboard()
+	if mode == config.StartupNever {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
+	defer cancel()
+
+	if mode == config.StartupAuto {
+		session, err := herdr.Snapshot(ctx)
+		if err != nil {
+			// Unknown state: do nothing. An unwanted overlay over live work
+			// is worse than a missing convenience, so the uncertain case
+			// declines to act rather than guessing.
+			fmt.Fprintln(os.Stderr, "wt: startup: skipping,", err)
+			return
+		}
+		if session.Busy() {
+			return
+		}
+	}
+	if err := herdr.OpenDashboard(ctx, pluginID, dashboardEntrypoint); err != nil {
+		fmt.Fprintln(os.Stderr, "wt: startup:", err)
+	}
 }
 
 // bootstrapPath runs a bootstrap and exits non-zero on failure. Shared by
