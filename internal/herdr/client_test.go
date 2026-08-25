@@ -132,3 +132,14 @@ func TestResumeClaudeSucceedsOnOKResponse(t *testing.T) {
 		t.Errorf("ResumeClaude: %v", err)
 	}
 }
+
+// writeFakeSocket creates a file where Running() looks for herdr's socket,
+// so tests can simulate a daemon being up without one.
+func writeFakeSocket(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "herdr.sock")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}

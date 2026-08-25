@@ -121,6 +121,55 @@ type Workspace struct {
 	Procs       []Proc
 	LastUsed    time.Time
 	Kind        Kind
+
+	// AgentStatus is the most attention-worthy state among the herdr agents
+	// running in this worktree: "blocked", "working", "idle", "done", or ""
+	// when none are. wt cannot compute this itself -- it only sees processes
+	// via ps, which cannot say whether an agent is waiting on a human.
+	AgentStatus string
+	// AgentCount is how many herdr agents are running here.
+	AgentCount int
+	// AgentProbe records how the herdr lookup went. See AgentProbe.
+	AgentProbe AgentProbe
+}
+
+// AgentProbe is the outcome of asking herdr what is running in a worktree.
+//
+// This is the package invariant's three-way split (see discover's package
+// comment), and the reason a plain bool would be wrong. Success and
+// unreadable are the usual pair, but "absent" here is a genuine, benign
+// third answer: wt works perfectly well with no herdr installed, and on such
+// a machine every worktree really does have zero agents. Treating that as
+// unknown would block deletion of every worktree forever for every user who
+// does not run herdr.
+//
+// So the zero value is Absent, not Unreadable -- a deliberate departure from
+// StatusKnown's polarity, justified only because absence is overwhelmingly
+// the common case AND is independently verifiable (no socket, no binary).
+// AgentProbeUnreadable is reserved for a daemon that is demonstrably up but
+// would not answer, which is unknown and does block. A bare Workspace{} is
+// still refused by PruneBlockers via !StatusKnown, so nothing rests on this
+// field alone.
+type AgentProbe uint8
+
+const (
+	// AgentProbeAbsent means no herdr daemon is running. A real answer.
+	AgentProbeAbsent AgentProbe = iota
+	// AgentProbeOK means herdr answered and AgentStatus/AgentCount are real.
+	AgentProbeOK
+	// AgentProbeUnreadable means herdr is up but could not be read. Unknown.
+	AgentProbeUnreadable
+)
+
+// HasBusyAgent reports whether a herdr agent is actively working in this
+// worktree or blocked waiting on a human. Either way it is in use.
+//
+// "idle" and "done" deliberately do not count: an agent sitting at a prompt
+// is exactly the long-lived session the user keeps around on purpose, and
+// refusing to ever delete those would defeat the point of the delete gate.
+func (w Workspace) HasBusyAgent() bool {
+	return w.AgentProbe == AgentProbeOK &&
+		(w.AgentStatus == "working" || w.AgentStatus == "blocked")
 }
 
 // HasLiveSession reports whether any session in this workspace is running.
@@ -150,6 +199,12 @@ func (w Workspace) PruneBlockers() []string {
 	}
 	if !w.StatusKnown {
 		b = append(b, "git status could not be read")
+	}
+	if w.HasBusyAgent() {
+		b = append(b, "has a "+w.AgentStatus+" herdr agent")
+	}
+	if w.AgentProbe == AgentProbeUnreadable {
+		b = append(b, "herdr is running but could not be asked what is in this worktree")
 	}
 	if w.DirtyCount > 0 {
 		b = append(b, "has uncommitted changes")

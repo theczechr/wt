@@ -3,7 +3,9 @@ package aggregate
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/theczechr/wt/internal/herdr"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -69,6 +71,42 @@ func discoverRepos(cfg config.Config) map[string]string {
 		}
 	}
 	return repos
+}
+
+// agentProbe pairs herdr's agent index with how the lookup went, so the
+// absent/unreadable distinction survives into every workspace.
+type agentProbe struct {
+	idx   herdr.Index
+	state model.AgentProbe
+}
+
+// applyAgents joins herdr's agents onto the collected worktrees.
+//
+// The probe state is stamped on every workspace even when it is Absent or
+// Unreadable, because those are facts about the lookup rather than about any
+// one worktree -- and PruneBlockers needs Unreadable to reach it, or a
+// daemon that stopped answering would silently read as "nothing running".
+func applyAgents(ws []model.Workspace, probe agentProbe) {
+	for i := range ws {
+		ws[i].AgentProbe = probe.state
+	}
+	if probe.state != model.AgentProbeOK {
+		return
+	}
+	// Attributed against the whole set at once, not per workspace: nested
+	// worktrees live inside the primary checkout, so an agent must be
+	// assigned to the most specific worktree containing it rather than to
+	// every worktree that happens to contain it.
+	paths := make([]string, len(ws))
+	for i := range ws {
+		paths[i] = ws[i].Path
+	}
+	byPath := probe.idx.Attribute(paths)
+	for i := range ws {
+		agents := byPath[ws[i].Path]
+		ws[i].AgentCount = len(agents)
+		ws[i].AgentStatus = herdr.Worst(agents)
+	}
 }
 
 // Collect runs every collector concurrently and returns merged workspaces,
@@ -156,6 +194,35 @@ func Collect(ctx context.Context, cfg config.Config) ([]model.Workspace, int) {
 		}(name, path)
 	}
 
+	// Asked once per Collect, concurrently with the process snapshot, and
+	// joined onto every worktree below. herdr answers over a local socket,
+	// so this costs far less than the git fan-out it runs beside.
+	agentsCh := make(chan agentProbe, 1)
+	go func() {
+		var res agentProbe
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "wt: recovered panic reading herdr agents: %v\n", r)
+				// A panic is not evidence herdr is absent. Report unknown.
+				res = agentProbe{state: model.AgentProbeUnreadable}
+			}
+			agentsCh <- res
+		}()
+		idx, err := herdr.Agents(ctx)
+		switch {
+		case err == nil:
+			res = agentProbe{idx: idx, state: model.AgentProbeOK}
+		case errors.Is(err, herdr.ErrNotRunning):
+			// Absent, not unknown: no daemon means genuinely no agents.
+			res = agentProbe{state: model.AgentProbeAbsent}
+		default:
+			// herdr is up but would not answer. Unknown, and the delete gate
+			// must treat it as such rather than as "nothing running here".
+			fmt.Fprintln(os.Stderr, "wt: herdr:", err)
+			res = agentProbe{state: model.AgentProbeUnreadable}
+		}
+	}()
+
 	procsCh := make(chan []model.Proc, 1)
 	liveCh := make(chan map[string]int, 1)
 	unresolvedCh := make(chan int, 1)
@@ -198,6 +265,7 @@ func Collect(ctx context.Context, cfg config.Config) ([]model.Workspace, int) {
 
 	result := Attribute(all, <-procsCh, <-liveCh)
 	unresolvedProcs := <-unresolvedCh
+	applyAgents(result, <-agentsCh)
 	// Persist for the next TUI launch to paint from immediately. Same
 	// best-effort contract as the session cache above. The unresolved-cwd
 	// count is deliberately NOT part of the snapshot: it is a fact about

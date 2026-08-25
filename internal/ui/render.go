@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/theczechr/wt/internal/herdr"
 	"github.com/theczechr/wt/internal/model"
 )
 
@@ -218,10 +219,51 @@ func rowTagParts(w model.Workspace) []tagPart {
 	if w.Kind == model.KindClaudeManaged || w.Kind == model.KindForeign {
 		parts = append(parts, tagPart{"⚠ agent", roleDim})
 	}
+	if tag, r, ok := agentTag(w); ok {
+		parts = append(parts, tagPart{tag, r})
+	}
 	if w.FreeHint() {
 		parts = append(parts, tagPart{"FREE", roleGreenBold})
 	}
 	return parts
+}
+
+// agentTag renders the herdr agent state for a worktree.
+//
+// Only three of herdr's five statuses get a tag, because a dashboard's job
+// is to be scannable and a tag on every row is a tag on no row:
+//
+//   - BLOCKED is the one that matters. An agent waiting on a human is the
+//     single thing a person opens this dashboard to find, and it is the one
+//     state wt could never compute on its own -- ps can see that a process
+//     exists, never that it is waiting for you. It gets the loudest role.
+//   - working is useful context, quietly.
+//   - idle and done get nothing: an agent sitting at a prompt is the
+//     long-lived session the user deliberately keeps around, and tagging all
+//     of those would drown the two states worth seeing.
+//
+// The unreadable case is tagged too, and deliberately not left blank. A
+// blank column already means "no agents here", so a daemon that stopped
+// answering must not borrow that reading -- the same argument rowDirty makes
+// for "?" when git status fails.
+func agentTag(w model.Workspace) (string, role, bool) {
+	if w.AgentProbe == model.AgentProbeUnreadable {
+		return "agent?", roleAmber, true
+	}
+	if w.AgentProbe != model.AgentProbeOK {
+		return "", roleDim, false
+	}
+	suffix := ""
+	if w.AgentCount > 1 {
+		suffix = fmt.Sprintf(" ×%d", w.AgentCount)
+	}
+	switch w.AgentStatus {
+	case herdr.StatusBlocked:
+		return "BLOCKED" + suffix, roleAmber, true
+	case herdr.StatusWorking:
+		return "working" + suffix, roleGreen, true
+	}
+	return "", roleDim, false
 }
 
 func tagPlainText(parts []tagPart) string {
