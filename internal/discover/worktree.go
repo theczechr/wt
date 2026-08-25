@@ -25,7 +25,9 @@
 //     about the real state, so none of them may produce the same value a
 //     genuine "nothing here" would.
 //
-// Four instances of this defect have been found in this package so far:
+// Four instances of this defect have been found in this package. All four
+// are now closed; each is kept below because the shape recurs, and the
+// fixes are the worked examples:
 //
 //  1. FillStatus set DirtyCount = 0 when `git status` failed -- the same
 //     zero an actually-clean tree produces. One real worktree in this
@@ -42,14 +44,15 @@
 //     struct plus an error; Snapshot itself is kept, unchanged, for
 //     callers that have always treated "nothing running" and "couldn't
 //     check" the same way and must keep doing so.
-//  4. SessionsFor returns nil on ANY os.ReadDir error -- indistinguishable
-//     from a worktree that genuinely has no sessions. NOT FIXED: it still
-//     collapses absent (the directory was never created) and unreadable
-//     (permission denied, a transient I/O error) into the same nil.
-//     Flagged here deliberately rather than fixed -- closing it needs its
-//     own scoped change. A future caller that relies on "no sessions" to
-//     help authorise a deletion must not assume SessionsFor's nil is
-//     safe.
+//  4. SessionsFor returned nil on ANY os.ReadDir error --
+//     indistinguishable from a worktree that genuinely has no sessions.
+//     Fixed: it now returns ([]Session, error), and the split is the
+//     three-way one above rather than a plain success/failure pair. A
+//     missing project directory is NOT an error -- a worktree nobody ever
+//     opened Claude in really does have zero sessions, and that is the
+//     common case -- while permission and I/O failures are. Callers record
+//     the outcome in model.Workspace.SessionsKnown, which PruneBlockers
+//     treats as a blocker when false. That was the last of the four.
 //
 // The three fixes above share a pattern worth copying: each adds a signal
 // recording whether the read actually succeeded, and makes the caller

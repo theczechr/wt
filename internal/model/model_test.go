@@ -88,7 +88,7 @@ func TestPruneBlockersZeroValueWorkspaceIsBlocked(t *testing.T) {
 // running processes must still be blocked purely because its git status
 // could not be read, and the reason must say so.
 func TestPruneBlockersRefusesUnknownStatusEvenWhenOtherwiseDeletable(t *testing.T) {
-	w := Workspace{Repo: "backend", Path: "/u/server-x", Kind: KindSibling}
+	w := Workspace{Repo: "backend", Path: "/u/server-x", Kind: KindSibling, SessionsKnown: true}
 	blockers := w.PruneBlockers()
 	if len(blockers) != 1 {
 		t.Fatalf("blockers = %v, want exactly one (the unknown-status blocker)", blockers)
@@ -104,7 +104,7 @@ func TestPruneBlockersRefusesUnknownStatusEvenWhenOtherwiseDeletable(t *testing.
 // workspace whose status genuinely was read successfully and came back
 // clean.
 func TestPruneBlockersAllowsCleanKnownWorkspace(t *testing.T) {
-	w := Workspace{Repo: "backend", Path: "/u/server-x", Kind: KindSibling, StatusKnown: true}
+	w := Workspace{Repo: "backend", Path: "/u/server-x", Kind: KindSibling, StatusKnown: true, SessionsKnown: true}
 	if blockers := w.PruneBlockers(); len(blockers) != 0 {
 		t.Errorf("blockers = %v, want none for a known-clean, non-primary, idle workspace", blockers)
 	}

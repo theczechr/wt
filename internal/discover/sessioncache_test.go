@@ -57,7 +57,7 @@ func TestSessionCacheHitReturnsCachedValueWithoutRereading(t *testing.T) {
 
 	// Fresh load, as a new wt invocation would do.
 	cache2 := LoadSessionCache()
-	sessions := SessionsFor(worktreePath, cache2)
+	sessions, _ := SessionsFor(worktreePath, cache2)
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
@@ -85,7 +85,7 @@ func TestSessionCacheChangedIdentityForcesReread(t *testing.T) {
 	}
 
 	cache2 := LoadSessionCache()
-	sessions := SessionsFor(worktreePath, cache2)
+	sessions, _ := SessionsFor(worktreePath, cache2)
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
@@ -106,7 +106,7 @@ func TestSessionCacheCorruptFileDegradesToLiveRead(t *testing.T) {
 	writeTranscript(t, pdir, "sess3", "live title from disk")
 
 	cache := LoadSessionCache()
-	sessions := SessionsFor(worktreePath, cache)
+	sessions, _ := SessionsFor(worktreePath, cache)
 	if len(sessions) != 1 || sessions[0].Title != "live title from disk" {
 		t.Errorf("corrupt cache must degrade to a live read, got %+v", sessions)
 	}
@@ -117,7 +117,7 @@ func TestSessionCacheNilDegradesToLiveReadEveryTime(t *testing.T) {
 	dir := setupProjectDir(t, worktreePath)
 	writeTranscript(t, dir, "sess4", "always live")
 
-	sessions := SessionsFor(worktreePath, nil)
+	sessions, _ := SessionsFor(worktreePath, nil)
 	if len(sessions) != 1 || sessions[0].Title != "always live" {
 		t.Errorf("nil cache must behave like no caching at all, got %+v", sessions)
 	}

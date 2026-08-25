@@ -118,9 +118,18 @@ type Workspace struct {
 	Behind      int
 	PR          PR
 	Sessions    []Session
-	Procs       []Proc
-	LastUsed    time.Time
-	Kind        Kind
+	// SessionsKnown reports whether this workspace's Claude session list was
+	// successfully determined (see discover.SessionsFor). Same polarity and
+	// same reasoning as StatusKnown: the zero value, false, means "unknown",
+	// never "known to have none", because an empty Sessions slice is
+	// produced by both a worktree nobody ever opened Claude in and a
+	// directory that could not be read. Only the first of those is safe to
+	// act on. A worktree whose project directory simply does not exist sets
+	// this TRUE -- that is a real answer, and the most common one.
+	SessionsKnown bool
+	Procs         []Proc
+	LastUsed      time.Time
+	Kind          Kind
 
 	// AgentStatus is the most attention-worthy state among the herdr agents
 	// running in this worktree: "blocked", "working", "idle", "done", or ""
@@ -211,6 +220,9 @@ func (w Workspace) PruneBlockers() []string {
 	}
 	if w.HasLiveSession() {
 		b = append(b, "has a live Claude session")
+	}
+	if !w.SessionsKnown {
+		b = append(b, "Claude sessions could not be read")
 	}
 	if len(w.Procs) > 0 {
 		b = append(b, "has running processes")

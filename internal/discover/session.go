@@ -2,6 +2,7 @@ package discover
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -140,15 +141,33 @@ func parseLines(buf []byte, s *model.Session, atStart bool) found {
 	return f
 }
 
-// SessionsFor returns every session recorded for a worktree, newest first.
+// SessionsFor returns every session recorded for a worktree, newest first,
+// and whether that answer is trustworthy.
+//
 // cache may be nil, in which case every transcript is read live, exactly as
 // before this existed; when non-nil, a transcript whose (mtime, size) still
 // matches a cached entry skips the tail read entirely.
-func SessionsFor(worktreePath string, cache *SessionCache) []model.Session {
+//
+// The error is the point of the signature, and it is three-way (see this
+// package's doc comment). A missing project directory is NOT an error: a
+// worktree nobody ever opened Claude in genuinely has zero sessions, and
+// that is the common case -- treating it as unknown would refuse to delete
+// precisely the worktrees that are safest to delete. Anything else --
+// permission denied, an I/O failure, ~/.claude/projects itself unreadable --
+// is unknown, and unknown must not be reported as "no sessions", because
+// that is the value which tells a deletion gate nothing is running here.
+//
+// This was the last of the four fail-open collectors named in the package
+// comment: it previously returned a nil slice for every ReadDir error,
+// making "never used" and "could not look" indistinguishable.
+func SessionsFor(worktreePath string, cache *SessionCache) ([]model.Session, error) {
 	dir := filepath.Join(model.ClaudeProjectsDir(), model.ProjectDirName(worktreePath))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil // a real answer: no sessions were ever recorded here
+		}
+		return nil, fmt.Errorf("reading sessions for %s: %w", worktreePath, err)
 	}
 	var out []model.Session
 	for _, e := range entries {
@@ -179,5 +198,5 @@ func SessionsFor(worktreePath string, cache *SessionCache) []model.Session {
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Mtime.After(out[j].Mtime) })
-	return out
+	return out, nil
 }

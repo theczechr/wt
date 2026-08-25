@@ -166,8 +166,18 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 		queryPaths = append(queryPaths, rw)
 	}
 	seenSession := map[string]bool{}
+	sessionsUnreadable := false
 	for _, qp := range queryPaths {
-		for _, s := range discover.SessionsFor(qp, nil) {
+		found, err := discover.SessionsFor(qp, nil)
+		if err != nil {
+			// Unreadable, not empty. Recorded as a blocker outright: this
+			// function's whole job is deciding whether a worktree may be
+			// deleted, and a session probe that could not run says nothing
+			// about what is living in it.
+			b = append(b, "Claude sessions could not be read: "+err.Error())
+			sessionsUnreadable = true
+		}
+		for _, s := range found {
 			if seenSession[s.ID] || s.ID == excludeSessionID {
 				continue
 			}
@@ -212,6 +222,10 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 			ID: sp.SessionID, Cwd: sp.Cwd, Live: true, PID: sp.PID,
 		})
 	}
+	// The Workspace handed to trash.SoftDelete re-runs PruneBlockers, whose
+	// !SessionsKnown check is only meaningful if this probe's outcome
+	// travels with it. Known exactly when every queried path answered.
+	ws.SessionsKnown = !sessionsUnreadable
 	if ws.HasLiveSession() {
 		b = append(b, "has a live Claude session")
 	}

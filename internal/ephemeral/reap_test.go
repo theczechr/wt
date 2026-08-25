@@ -466,7 +466,7 @@ func TestBlockersRefusesLiveSessionLaunchedFromASubdirectory(t *testing.T) {
 	// Precondition: without this, the test could pass through the old
 	// transcript path and prove nothing about the new clause. (An empty
 	// directory is invisible to git status, so `sub` adds no dirty blocker.)
-	if s := discover.SessionsFor(wt, nil); len(s) != 0 {
+	if s, _ := discover.SessionsFor(wt, nil); len(s) != 0 {
 		t.Fatalf("precondition: the worktree root must have no transcript directory, got %d sessions", len(s))
 	}
 

@@ -169,7 +169,14 @@ func Collect(ctx context.Context, cfg config.Config) ([]model.Workspace, int) {
 						}
 					}()
 					discover.FillStatus(ctx, w)
-					w.Sessions = discover.SessionsFor(w.Path, sessionCache)
+					sessions, sessErr := discover.SessionsFor(w.Path, sessionCache)
+					// SessionsKnown stays false on error, which PruneBlockers
+					// treats as a blocker: an unreadable session directory
+					// must not read as "no sessions here".
+					w.Sessions, w.SessionsKnown = sessions, sessErr == nil
+					if sessErr != nil {
+						fmt.Fprintln(os.Stderr, "wt:", sessErr)
+					}
 					if pr, ok := prs[w.Branch]; ok {
 						w.PR = pr
 					} else {

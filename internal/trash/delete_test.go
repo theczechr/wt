@@ -115,7 +115,7 @@ func TestSoftDeleteDoesNotFollowSymlinkOutOfWorktree(t *testing.T) {
 
 	ws := model.Workspace{
 		Repo: "test", Path: worktreePath, Branch: "feature/symlink-test",
-		Kind: model.KindSibling, StatusKnown: true,
+		Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true,
 	}
 	if _, err := SoftDelete(context.Background(), ws, primary); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
@@ -142,7 +142,7 @@ func TestSoftDeleteRemovesWorktreeKeepsBranchWritesManifest(t *testing.T) {
 	target := filepath.Join(filepath.Dir(primary), "wt-soft-delete-test")
 	addWorktree(t, primary, target, "feature/soft-delete")
 
-	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/soft-delete", Kind: model.KindSibling, StatusKnown: true}
+	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/soft-delete", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true}
 	entry, err := SoftDelete(context.Background(), ws, primary)
 	if err != nil {
 		t.Fatalf("SoftDelete: %v", err)
@@ -175,8 +175,8 @@ func TestSoftDeleteRefusesDirtyWorktreeAndLeavesItIntact(t *testing.T) {
 
 	ws := model.Workspace{
 		Repo: "test", Path: target, Branch: "feature/dirty", Kind: model.KindSibling,
-		StatusKnown: true,
-		DirtyCount:  1, // PruneBlockers' own signal, exactly as aggregate.Collect would set it
+		StatusKnown: true, SessionsKnown: true,
+		DirtyCount: 1, // PruneBlockers' own signal, exactly as aggregate.Collect would set it
 	}
 	_, err := SoftDelete(context.Background(), ws, primary)
 	if err == nil {
@@ -214,7 +214,7 @@ func TestHardDeleteOnUnmergedBranchKeepsBranchReportsRefusal(t *testing.T) {
 	runGit(t, target, "add", "unmerged.txt")
 	runGit(t, target, "commit", "-q", "-m", "unmerged work")
 
-	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/unmerged", Kind: model.KindSibling, StatusKnown: true}
+	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/unmerged", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true}
 	res, err := HardDelete(context.Background(), ws, primary)
 	if err != nil {
 		t.Fatalf("HardDelete: %v", err)
@@ -243,7 +243,7 @@ func TestHardDeleteOnMergedBranchDeletesBranch(t *testing.T) {
 	addWorktree(t, primary, target, "feature/merged")
 	// No new commits: the branch is identical to main, i.e. already merged.
 
-	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/merged", Kind: model.KindSibling, StatusKnown: true}
+	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/merged", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true}
 	res, err := HardDelete(context.Background(), ws, primary)
 	if err != nil {
 		t.Fatalf("HardDelete: %v", err)
@@ -279,7 +279,7 @@ func TestRestoreRecreatesWorktreeAndRemovesManifestEntry(t *testing.T) {
 	target := filepath.Join(filepath.Dir(primary), "wt-restore-test")
 	addWorktree(t, primary, target, "feature/restore-me")
 
-	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/restore-me", Kind: model.KindSibling, StatusKnown: true}
+	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/restore-me", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true}
 	entry, err := SoftDelete(context.Background(), ws, primary)
 	if err != nil {
 		t.Fatalf("SoftDelete: %v", err)
@@ -310,7 +310,7 @@ func TestRestoreRefusesWhenPathIsOccupied(t *testing.T) {
 	target := filepath.Join(filepath.Dir(primary), "wt-restore-occupied-test")
 	addWorktree(t, primary, target, "feature/occupied")
 
-	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/occupied", Kind: model.KindSibling, StatusKnown: true}
+	ws := model.Workspace{Repo: "test", Path: target, Branch: "feature/occupied", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true}
 	entry, err := SoftDelete(context.Background(), ws, primary)
 	if err != nil {
 		t.Fatalf("SoftDelete: %v", err)

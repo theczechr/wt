@@ -405,7 +405,7 @@ func TestUnresolvedProcsWarningIsGlobalNotPerTarget(t *testing.T) {
 // confirm" and the DELETE? title in place. Warnings inform; only
 // PruneBlockers refuses.
 func TestUnresolvedProcsWarningRendersAndNeverBlocks(t *testing.T) {
-	ws := model.Workspace{Path: "/u/clean", Branch: "feat/w", Kind: model.KindSibling, StatusKnown: true}
+	ws := model.Workspace{Path: "/u/clean", Branch: "feat/w", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true}
 	m := uiModel{picker: pickerConfirmDelete, confirmTarget: ws, unresolvedProcs: 3}
 
 	if blockers := ws.PruneBlockers(); len(blockers) != 0 {
@@ -434,8 +434,8 @@ func TestUnpushedWarningsAreNeverBlockers(t *testing.T) {
 		name string
 		ws   model.Workspace
 	}{
-		{"never pushed", model.Workspace{Path: "/u/a", Kind: model.KindSibling, StatusKnown: true}},
-		{"ahead of upstream", model.Workspace{Path: "/u/b", Kind: model.KindSibling, StatusKnown: true, HasUpstream: true, Ahead: 5}},
+		{"never pushed", model.Workspace{Path: "/u/a", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true}},
+		{"ahead of upstream", model.Workspace{Path: "/u/b", Kind: model.KindSibling, StatusKnown: true, SessionsKnown: true, HasUpstream: true, Ahead: 5}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
