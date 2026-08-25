@@ -42,3 +42,26 @@ command = ["wt"]
 [[events]]
 on = "worktree.created"
 command = ["wt", "hook", "herdr-worktree-created"]
+
+# The dashboard again, as a bindable action.
+#
+# A [[panes]] entry declares an entrypoint but is not itself something a key
+# can be bound to: herdr's `[[keys.command]]` takes `type = "plugin_action"`
+# and a `<plugin_id>.<action_id>` target, and `herdr plugin action list`
+# reports only [[actions]]. So the keyboard path to the dashboard is an action
+# that opens the pane.
+#
+# It calls herdr back through $HERDR_BIN_PATH rather than a bare `herdr`.
+# Herdr injects that variable into every runtime command precisely so plugins
+# do not have to find the binary themselves, and it keeps this working when
+# herdr is not on PATH.
+#
+# context = ["global"] because the dashboard is not scoped to the focused
+# workspace, tab or pane -- it lists every worktree in every configured repo,
+# which is the point of it.
+[[actions]]
+id = "open-dashboard"
+title = "Worktrees"
+description = "Open the wt dashboard as an overlay"
+contexts = ["global"]
+command = ["sh", "-c", '"$HERDR_BIN_PATH" plugin pane open --plugin theczechr.wt --entrypoint dashboard --placement overlay']
