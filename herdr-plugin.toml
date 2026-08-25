@@ -82,3 +82,14 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" plugin pane open --plugin theczechr.wt
 # override.
 [[startup]]
 command = ["wt", "hook", "herdr-startup"]
+
+# Drop a removed worktree from wt's paint snapshot, so the next launch does
+# not show a row for a directory that is gone.
+#
+# This is the verified half of the pair. herdr's worktree.removed payload is
+# typed and schema-checked; Claude Code's own WorktreeRemove hook has a
+# payload shape this project has never confirmed (see README), so the same
+# subcommand accepts an argv path and CLAUDE_WORKTREE_PATH as well.
+[[events]]
+on = "worktree.removed"
+command = ["wt", "hook", "worktree-removed"]

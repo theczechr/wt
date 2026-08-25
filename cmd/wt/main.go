@@ -102,7 +102,7 @@ func main() {
 		// Plugin/hook entrypoints, dispatched by name so one reserved word
 		// covers every integration rather than one per host tool.
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: wt hook herdr-worktree-created|herdr-startup")
+			fmt.Fprintln(os.Stderr, "usage: wt hook herdr-worktree-created|herdr-startup|worktree-removed")
 			os.Exit(2)
 		}
 		switch os.Args[2] {
@@ -110,6 +110,8 @@ func main() {
 			herdrWorktreeCreated(cfg)
 		case "herdr-startup":
 			herdrStartup(cfg)
+		case "worktree-removed":
+			worktreeRemoved()
 		default:
 			fmt.Fprintf(os.Stderr, "wt: hook: unknown hook %q\n", os.Args[2])
 			os.Exit(2)
@@ -249,6 +251,19 @@ func main() {
 			handOff(path, "")
 		case ui.ActionResume:
 			handOff(path, session)
+		case ui.ActionNew:
+			// path is a BRANCH NAME here, not a directory: the worktree does
+			// not exist yet. Created on the same code path `wt <branch>`
+			// uses, so there is one implementation of create -- and outside
+			// the TUI, which has already exited, because a submodule clone
+			// plus post_create can run for minutes and its output is what
+			// the user wants to watch.
+			created, err := openBranch(cfg, path)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "wt:", err)
+				os.Exit(1)
+			}
+			handOff(created, "")
 		}
 	case "open":
 		if len(os.Args) < 3 {
@@ -371,7 +386,7 @@ func openAndCd(cfg config.Config, branch string) {
 		fmt.Fprintln(os.Stderr, "wt:", err)
 		os.Exit(1)
 	}
-	writeChoice(path, "")
+	handOff(path, "")
 }
 
 // openBranch resolves branch to a worktree, creating an ephemeral one when
@@ -546,6 +561,46 @@ func herdrStartup(cfg config.Config) {
 	}
 	if err := herdr.OpenDashboard(ctx, pluginID, dashboardEntrypoint); err != nil {
 		fmt.Fprintln(os.Stderr, "wt: startup:", err)
+	}
+}
+
+// worktreeRemoved drops a removed worktree from the paint snapshot, so the
+// next launch does not show a row for a directory that is gone.
+//
+// It accepts the path from whichever source fired it, because two different
+// systems announce the same event and only one of them is verified:
+// herdr's worktree.removed carries a typed, schema-checked payload in
+// HERDR_PLUGIN_EVENT_JSON, while Claude Code's WorktreeRemove hook has a
+// payload shape this project has never confirmed (see README). An explicit
+// argv path is the third and simplest form, and the one a script should use.
+//
+// Doing nothing is the correct outcome for an unrecognised payload: this
+// only ever prunes a UI cache that the next refresh rebuilds anyway, so
+// there is no failure here worth an exit code.
+func worktreeRemoved() {
+	path := ""
+	if len(os.Args) > 3 {
+		path = os.Args[3]
+	}
+	if path == "" {
+		path = os.Getenv("CLAUDE_WORKTREE_PATH")
+	}
+	if path == "" {
+		if wt, err := herdr.ParseWorktreeRemoved(os.Getenv("HERDR_PLUGIN_EVENT_JSON")); err == nil {
+			path = wt.Path
+		}
+	}
+	if path == "" {
+		fmt.Fprintln(os.Stderr, "wt: hook: no worktree path in argv, CLAUDE_WORKTREE_PATH, or HERDR_PLUGIN_EVENT_JSON")
+		return
+	}
+	dropped, err := aggregate.DropFromSnapshot(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wt: hook:", err)
+		return
+	}
+	if dropped {
+		fmt.Println("dropped", path, "from the snapshot")
 	}
 }
 

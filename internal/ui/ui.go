@@ -21,6 +21,10 @@ const (
 	ActionNone Action = iota
 	ActionCd
 	ActionResume
+	// ActionNew carries a BRANCH NAME in the chosen field, not a path:
+	// the worktree does not exist yet. main creates it, then hands off the
+	// resulting path exactly as ActionCd would.
+	ActionNew
 )
 
 // pickerMode is which additive which-key overlay (if any) currently owns
@@ -36,6 +40,7 @@ const (
 	pickerGrep
 	pickerConfirmDelete
 	pickerTrash
+	pickerNew
 )
 
 // screenLine is one rendered line of the worktree pane. wsIndex is the
@@ -109,6 +114,11 @@ type uiModel struct {
 
 	// grep picker: streams matches from ripgrep over Claude transcripts.
 	grep grepState
+
+	// new-worktree picker: a branch name, plus the last validation failure
+	// so a typo can be corrected in place. See new_picker.go.
+	newQuery string
+	newErr   string
 
 	// confirm-delete: armed by "d" from the dashboard, confirmed by a
 	// second "d" within confirmWindow, cancelled by anything else. See
@@ -282,6 +292,8 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateWhichKey(msg)
 		case m.picker == pickerFind:
 			return m.updateFind(msg)
+		case m.picker == pickerNew:
+			return m.updateNew(msg)
 		case m.picker == pickerGrep:
 			return m.updateGrep(msg)
 		case m.picker == pickerConfirmDelete:
@@ -399,6 +411,11 @@ func (m uiModel) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.resumeSelected(vis)
 		}
 		return m.updateResume(vis)
+	case "n":
+		m.picker = pickerNew
+		m.newQuery = ""
+		m.newErr = ""
+		return m, nil
 	case "d":
 		if m.deleting || len(vis) == 0 {
 			return m, nil
@@ -487,7 +504,7 @@ func (m uiModel) footerKeys() string {
 	if m.focus == focusSessions {
 		return "j/k session  ⏎ resume this one  tab/esc back  R refresh  q quit"
 	}
-	return "j/k move  tab sessions  [ ] section  1-9 repo  ⏎ cd  r resume  / filter  R refresh  q quit"
+	return "j/k move  tab sessions  [ ] section  1-9 repo  ⏎ cd  n new  r resume  / filter  R refresh  q quit"
 }
 
 func (m uiModel) focusedSessions(vis []model.Workspace) []model.Session {
@@ -617,6 +634,8 @@ func (m uiModel) View() string {
 		return m.viewWhichKey(width, height)
 	case pickerFind:
 		return m.viewFindPicker(width, paneHeight)
+	case pickerNew:
+		return m.viewNewPicker(width, paneHeight)
 	case pickerGrep:
 		return m.viewGrepPicker(width, paneHeight)
 	case pickerConfirmDelete:

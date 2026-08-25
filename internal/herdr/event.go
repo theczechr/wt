@@ -68,6 +68,16 @@ var ErrNotWorktreeCreated = errors.New("payload is not a worktree.created event"
 // ParseWorktreeCreated extracts the created worktree from a
 // HERDR_PLUGIN_EVENT_JSON payload.
 func ParseWorktreeCreated(payload string) (WorktreeInfo, error) {
+	return parseWorktreeEvent(payload, "worktree.created", "worktree_created")
+}
+
+// ParseWorktreeRemoved is ParseWorktreeCreated for the removal event, which
+// carries the same WorktreeInfo.
+func ParseWorktreeRemoved(payload string) (WorktreeInfo, error) {
+	return parseWorktreeEvent(payload, "worktree.removed", "worktree_removed")
+}
+
+func parseWorktreeEvent(payload string, wantDotted, wantSnake string) (WorktreeInfo, error) {
 	payload = strings.TrimSpace(payload)
 	if payload == "" {
 		return WorktreeInfo{}, errors.New("HERDR_PLUGIN_EVENT_JSON is empty: the hook ran outside herdr, or herdr changed how it passes event payloads")
@@ -91,7 +101,7 @@ func ParseWorktreeCreated(payload string) (WorktreeInfo, error) {
 	// Both spellings of the same event name are accepted: "worktree.created"
 	// is EventKind's wire name, "worktree_created" is EventData's serde tag,
 	// and which one lands here depends on the unverified question above.
-	if kind != "" && kind != "worktree.created" && kind != "worktree_created" {
+	if kind != "" && kind != wantDotted && kind != wantSnake {
 		return WorktreeInfo{}, fmt.Errorf("%w: got %q", ErrNotWorktreeCreated, kind)
 	}
 
