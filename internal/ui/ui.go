@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/theczechr/wt/internal/herdr"
 	"github.com/theczechr/wt/internal/model"
 	"github.com/theczechr/wt/internal/trash"
 )
@@ -45,17 +46,39 @@ type screenLine struct {
 	wsIndex int
 }
 
+// focusPane is which pane Tab has given the navigation keys to.
+//
+// Only worktrees and sessions participate. The processes pane is
+// deliberately excluded: nothing there is actionable -- there is no "resume
+// a process" -- so putting it in the cycle would cost a Tab press on the way
+// back to something useful.
+type focusPane uint8
+
+const (
+	focusWorktrees focusPane = iota
+	focusSessions
+)
+
 type uiModel struct {
-	ws        []model.Workspace // master list, pre-sorted by Run
-	cursor    int               // index into visible()
-	filter    string
-	filtering bool
-	width     int
-	height    int
-	action    Action
-	chosen    string
-	session   string
-	status    string // ephemeral info line, e.g. "can't attach to a live session"
+	ws     []model.Workspace // master list, pre-sorted by Run
+	cursor int               // index into visible()
+	// focus is which pane owns j/k and enter. The dashboard is a
+	// worktree list first and foremost, so worktrees is the zero value and
+	// every other key behaves identically in both focuses -- Tab only moves
+	// what the four navigation keys act on.
+	focus focusPane
+	// sessionCursor indexes the focused worktree's Sessions. Reset to 0
+	// whenever the worktree cursor moves, since it indexes a different
+	// list then.
+	sessionCursor int
+	filter        string
+	filtering     bool
+	width         int
+	height        int
+	action        Action
+	chosen        string
+	session       string
+	status        string // ephemeral info line, e.g. "can't attach to a live session"
 
 	// refresh re-collects the whole workspace list, plus a count of
 	// processes whose cwd could not be resolved during that collection
@@ -328,13 +351,33 @@ func (m uiModel) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "tab":
+		return m.toggleFocus(vis)
+	case "esc":
+		// Esc always returns to the worktree list, matching how it leaves
+		// every picker.
+		m.focus = focusWorktrees
 	case "j", "down":
+		if m.focus == focusSessions {
+			if m.sessionCursor < len(m.focusedSessions(vis))-1 {
+				m.sessionCursor++
+			}
+			break
+		}
 		if m.cursor < len(vis)-1 {
 			m.cursor++
+			m.sessionCursor = 0
 		}
 	case "k", "up":
+		if m.focus == focusSessions {
+			if m.sessionCursor > 0 {
+				m.sessionCursor--
+			}
+			break
+		}
 		if m.cursor > 0 {
 			m.cursor--
+			m.sessionCursor = 0
 		}
 	case "/":
 		m.filtering = true
@@ -343,12 +386,18 @@ func (m uiModel) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		m.picker = pickerWhichKey
 	case "enter":
+		if m.focus == focusSessions {
+			return m.resumeSelected(vis)
+		}
 		if len(vis) > 0 {
 			m.chosen = vis[m.cursor].Path
 			m.action = ActionCd
 			return m, tea.Quit
 		}
 	case "r":
+		if m.focus == focusSessions {
+			return m.resumeSelected(vis)
+		}
 		return m.updateResume(vis)
 	case "d":
 		if m.deleting || len(vis) == 0 {
@@ -429,6 +478,77 @@ func (m *uiModel) jumpSection(vis []model.Workspace, dir int) {
 // its pid and path are surfaced as a status message instead of pretending
 // the resume happened. The newest idle session is preferred when several
 // exist.
+// focusedSessions is the session list Tab navigates: the sessions of the
+// worktree under the worktree cursor.
+// footerKeys is the key hint line, which changes with focus: while the
+// sessions pane has focus, j/k and enter mean something different, and a
+// footer that kept claiming "[ ] section" and "cd" would be lying.
+func (m uiModel) footerKeys() string {
+	if m.focus == focusSessions {
+		return "j/k session  ⏎ resume this one  tab/esc back  R refresh  q quit"
+	}
+	return "j/k move  tab sessions  [ ] section  1-9 repo  ⏎ cd  r resume  / filter  R refresh  q quit"
+}
+
+func (m uiModel) focusedSessions(vis []model.Workspace) []model.Session {
+	if len(vis) == 0 || m.cursor >= len(vis) {
+		return nil
+	}
+	return vis[m.cursor].Sessions
+}
+
+// toggleFocus moves between the worktree list and the sessions pane.
+//
+// It refuses rather than silently succeeding in the two cases where the
+// sessions pane cannot be acted on: when the worktree has no sessions, and
+// when the terminal is too narrow for that pane to be drawn at all (see
+// narrowWidth). Moving an invisible cursor into a pane the user cannot see
+// would leave j/k apparently dead.
+func (m uiModel) toggleFocus(vis []model.Workspace) (tea.Model, tea.Cmd) {
+	if m.focus == focusSessions {
+		m.focus = focusWorktrees
+		return m, nil
+	}
+	if m.width > 0 && m.width < narrowWidth {
+		m.status = "sessions pane is hidden at this width"
+		return m, nil
+	}
+	if len(m.focusedSessions(vis)) == 0 {
+		m.status = "no sessions in this worktree"
+		return m, nil
+	}
+	m.focus = focusSessions
+	if m.sessionCursor >= len(m.focusedSessions(vis)) {
+		m.sessionCursor = 0
+	}
+	return m, nil
+}
+
+// resumeSelected resumes the session under the sessions cursor, rather than
+// updateResume's newest-idle pick.
+//
+// A live session is allowed here, unlike in updateResume, but only when
+// herdr is running. That is not a special case bolted on: herdr owns the
+// pty, so handing it the worktree focuses the workspace already showing that
+// session -- which is what "attach" means. Without herdr the original
+// limitation stands, and the message says why rather than failing silently.
+func (m uiModel) resumeSelected(vis []model.Workspace) (tea.Model, tea.Cmd) {
+	sessions := m.focusedSessions(vis)
+	if m.sessionCursor >= len(sessions) {
+		return m, nil
+	}
+	s := sessions[m.sessionCursor]
+	if s.Live && !herdr.Running() {
+		m.status = fmt.Sprintf("session %s is live (pid %d) — can't attach without herdr owning the pty",
+			s.Label(), s.PID)
+		return m, nil
+	}
+	m.chosen = vis[m.cursor].Path
+	m.session = s.ID
+	m.action = ActionResume
+	return m, tea.Quit
+}
+
 func (m uiModel) updateResume(vis []model.Workspace) (tea.Model, tea.Cmd) {
 	if len(vis) == 0 {
 		return m, nil
@@ -542,7 +662,7 @@ func (m uiModel) View() string {
 	case m.status != "":
 		footer = styleFor(roleOrange, false).Render(m.status)
 	default:
-		footer = styleFor(roleDim, false).Render("j/k move  [ ] section  1-9 repo  ⏎ cd  r resume  / filter  R refresh  q quit")
+		footer = styleFor(roleDim, false).Render(m.footerKeys())
 	}
 	// Shown regardless of mode, so a refresh in flight while filtering (or
 	// while a status line is up) is never hidden -- a stale view must never
@@ -683,17 +803,32 @@ func (m uiModel) renderSessionsPane(vis []model.Workspace, outerWidth, outerHeig
 	if inner < 0 {
 		inner = 0
 	}
+	focused := m.focus == focusSessions
 	content := detailContent(vis, m.cursor, inner, func(w model.Workspace) []string {
 		if len(w.Sessions) == 0 {
 			return []string{styleFor(roleDim, false).Render(padField("  (none)", inner))}
 		}
 		lines := make([]string, len(w.Sessions))
-		for i, s := range w.Sessions {
-			lines[i] = "  " + RenderSession(s, inner-2)
+		for i, sess := range w.Sessions {
+			// The selected row is marked only while this pane has focus.
+			// A cursor drawn in an unfocused pane claims j/k would move it,
+			// which is exactly what Tab is there to change.
+			gutter := "  "
+			if focused && i == m.sessionCursor {
+				gutter = styleFor(roleAccentBold, false).Render("▸ ")
+			}
+			lines[i] = gutter + RenderSession(sess, inner-2)
 		}
 		return lines
 	})
-	return renderPane("SESSIONS", content, outerWidth, outerHeight)
+	// The title carries the focus too, so the pane reads as active even
+	// when its worktree happens to have a single session and the row marker
+	// alone would be ambiguous.
+	title := "SESSIONS"
+	if focused {
+		title = "SESSIONS ◆"
+	}
+	return renderPane(title, content, outerWidth, outerHeight)
 }
 
 func (m uiModel) renderProcsPane(vis []model.Workspace, outerWidth, outerHeight int) string {
