@@ -244,9 +244,9 @@ func main() {
 		}
 		switch action {
 		case ui.ActionCd:
-			writeChoice(path, "")
+			handOff(path, "")
 		case ui.ActionResume:
-			writeChoice(path, session)
+			handOff(path, session)
 		}
 	case "open":
 		if len(os.Args) < 3 {
@@ -302,6 +302,52 @@ func writeChoice(path, sessionID string) {
 	target := filepath.Join(os.TempDir(), "wt-cd")
 	if err := os.WriteFile(target, []byte(body), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, "wt:", err)
+	}
+}
+
+// handOff acts on the worktree the user chose, by whichever route can
+// actually reach them.
+//
+// From a shell -- inside a herdr pane or outside one -- that is the choice
+// file the zsh wrapper reads, because no process can change its parent
+// shell's directory. Opened as a herdr plugin pane there is no parent shell:
+// herdr runs the command directly and closes the overlay when it exits, so
+// the file would be written and never read, and pressing enter would appear
+// to do nothing. There the choice goes back to herdr, which can open and
+// focus the worktree itself.
+//
+// A resume is deliberately not symmetrical between the two routes. The
+// wrapper always runs `claude --resume`, since a shell can only ever be in
+// one place. Under herdr, a worktree that was ALREADY open is only focused:
+// whatever is running in that workspace is far more likely to be the session
+// the user meant than a second copy started underneath it. That is also the
+// case the original design could not handle at all -- without something
+// owning the pty there was no way to reach a session running in another
+// terminal, and focusing herdr's workspace is exactly that.
+func handOff(path, sessionID string) {
+	if !herdr.InPluginPane() {
+		writeChoice(path, sessionID)
+		return
+	}
+	if path == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mutateTimeout)
+	defer cancel()
+
+	opened, err := herdr.OpenWorktree(ctx, path)
+	if err != nil {
+		// The overlay is closing as this process exits, so this line is for
+		// `herdr plugin log` rather than for the screen.
+		fmt.Fprintln(os.Stderr, "wt:", err)
+		os.Exit(1)
+	}
+	if sessionID == "" || opened.AlreadyOpen {
+		return
+	}
+	if err := herdr.ResumeClaude(ctx, opened.PaneID, sessionID, filepath.Base(path)); err != nil {
+		fmt.Fprintln(os.Stderr, "wt: opened", path, "but could not resume:", err)
+		os.Exit(1)
 	}
 }
 
