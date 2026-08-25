@@ -1,0 +1,44 @@
+# wt as a herdr plugin.
+#
+# herdr owns terminal sessions and agents; wt owns worktrees, git state and
+# Claude session discovery. They meet at two points, and this manifest is both
+# of them.
+#
+# Install with `herdr plugin link <path-to-this-repo>` (or `herdr plugin
+# install theczechr/wt` once published). Requires `wt` on PATH.
+
+id = "theczechr.wt"
+name = "wt"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Worktree and Claude-session dashboard, with bootstrap for herdr-created worktrees"
+platforms = ["linux", "macos"]
+
+# The dashboard, as a transient overlay: it opens zoomed over whatever pane is
+# focused and restores that focus and zoom on exit, so checking worktree state
+# never costs a layout change. wt paints its first frame from a snapshot in
+# well under a second, which is what makes an overlay the right placement
+# rather than a permanent split.
+[[panes]]
+id = "dashboard"
+title = "Worktrees"
+description = "Browse worktrees, sessions and processes across every configured repo"
+placement = "overlay"
+command = ["wt"]
+
+# The integration that actually closes a gap.
+#
+# herdr creates worktrees itself -- worktree.create takes branch, base and
+# path -- but has no bootstrap step of any kind: no post-create hook, no env
+# handling, no submodule init. In a repo whose .env files are gitignored and
+# whose build needs an initialised submodule, a herdr-made worktree cannot
+# build. This hook hands the new worktree's path to the same bootstrap that
+# `wt bootstrap` and `wt <branch>` use, so a worktree herdr creates is
+# prepared identically to one made by hand.
+#
+# The hook exits 0 and explains itself for worktrees in repos wt does not
+# manage -- it fires for every worktree herdr creates, most of which are not
+# ours -- and exits non-zero only when the payload itself is broken.
+[[events]]
+on = "worktree.created"
+command = ["wt", "hook", "herdr-worktree-created"]

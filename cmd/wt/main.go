@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"github.com/theczechr/wt/internal/bootstrap"
 	"github.com/theczechr/wt/internal/config"
 	"github.com/theczechr/wt/internal/ephemeral"
+	"github.com/theczechr/wt/internal/herdr"
 	"github.com/theczechr/wt/internal/model"
 	"github.com/theczechr/wt/internal/resolve"
 	"github.com/theczechr/wt/internal/trash"
@@ -95,18 +97,21 @@ func main() {
 		// path a misconfigured WorktreeCreate hook payload (README: the
 		// real shape is unverified) would take if it ever carried the
 		// project root instead of the new worktree's path.
-		if bootstrap.SamePath(primary, target) {
-			fmt.Fprintf(os.Stderr, "wt: bootstrap: refusing to bootstrap %s -- it is the primary checkout, not a worktree\n", target)
-			os.Exit(1)
+		bootstrapPath(cfg, repoName, primary, target)
+	case "hook":
+		// Plugin/hook entrypoints, dispatched by name so one reserved word
+		// covers every integration rather than one per host tool.
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: wt hook herdr-worktree-created")
+			os.Exit(2)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), mutateTimeout)
-		err = bootstrap.Run(ctx, primary, target, cfg.Repos[repoName])
-		cancel()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "wt: bootstrap:", err)
-			os.Exit(1)
+		switch os.Args[2] {
+		case "herdr-worktree-created":
+			herdrWorktreeCreated(cfg)
+		default:
+			fmt.Fprintf(os.Stderr, "wt: hook: unknown hook %q\n", os.Args[2])
+			os.Exit(2)
 		}
-		fmt.Printf("bootstrapped %s from %s\n", target, primary)
 	case "new":
 		if len(os.Args) < 4 {
 			fmt.Fprintln(os.Stderr, "usage: wt new <repo> <branch> [name]")
@@ -269,7 +274,7 @@ func main() {
 
 // usage is the one-line summary printed by `wt help` and by the unknown
 // -reserved-word failure path.
-const usage = "usage: wt [status|new|bootstrap|reap|open <branch>|<branch>]"
+const usage = "usage: wt [status|new|bootstrap|reap|hook <name>|open <branch>|<branch>]"
 
 // nonNilWorkspaces normalises a nil slice to an empty one. wt status is a
 // scripting interface, and encoding/json marshals a nil slice as `null`,
@@ -305,7 +310,7 @@ func writeChoice(path, sessionID string) {
 // of these is still reachable.
 var reservedCommands = map[string]bool{
 	"status": true, "new": true, "bootstrap": true, "reap": true,
-	"open": true, "help": true, "-h": true, "--help": true,
+	"open": true, "hook": true, "help": true, "-h": true, "--help": true,
 }
 
 func isReservedCommand(arg string) bool { return reservedCommands[arg] }
@@ -444,6 +449,61 @@ func repoNames(primaries map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// bootstrapPath runs a bootstrap and exits non-zero on failure. Shared by
+// `wt bootstrap <path>` and every hook entrypoint, so a worktree created by
+// herdr is prepared by exactly the same code -- and refused by exactly the
+// same guards -- as one created by hand.
+func bootstrapPath(cfg config.Config, repoName, primary, target string) {
+	// Bootstrapping the primary checkout is never legitimate: it is where
+	// the source env files live, so src and dst would be identical for every
+	// entry. Refuse outright rather than rely solely on LinkEnv's own
+	// per-entry guard, since a hook payload naming the wrong path is exactly
+	// how this call site would be reached.
+	if bootstrap.SamePath(primary, target) {
+		fmt.Fprintf(os.Stderr, "wt: bootstrap: refusing to bootstrap %s -- it is the primary checkout, not a worktree\n", target)
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mutateTimeout)
+	err := bootstrap.Run(ctx, primary, target, cfg.Repos[repoName])
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wt: bootstrap:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("bootstrapped %s from %s\n", target, primary)
+}
+
+// herdrWorktreeCreated is the `worktree.created` plugin event hook. Herdr
+// creates the worktree; wt supplies the bootstrap herdr has no concept of.
+//
+// Exit codes carry meaning here, because herdr surfaces plugin command
+// failures in its logs and a hook that cries wolf gets ignored:
+//
+//   - a payload for some other event, or a worktree in a repo wt does not
+//     manage, exits 0 and says why on stderr. Neither is a fault; the hook
+//     fires for every worktree herdr creates, most of which are not ours.
+//   - a malformed or absent payload exits non-zero. That means the wiring is
+//     broken -- wrong env var, a herdr protocol change -- and silence would
+//     leave worktrees quietly unbootstrapped, which is the failure this hook
+//     exists to prevent.
+func herdrWorktreeCreated(cfg config.Config) {
+	wt, err := herdr.ParseWorktreeCreated(os.Getenv("HERDR_PLUGIN_EVENT_JSON"))
+	if err != nil {
+		if errors.Is(err, herdr.ErrNotWorktreeCreated) {
+			fmt.Fprintln(os.Stderr, "wt: hook: ignoring,", err)
+			return
+		}
+		fmt.Fprintln(os.Stderr, "wt: hook:", err)
+		os.Exit(1)
+	}
+	repoName, primary, err := resolveRepo(cfg, wt.Path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wt: hook: skipping,", err)
+		return
+	}
+	bootstrapPath(cfg, repoName, primary, wt.Path)
 }
 
 // resolveRepo finds which configured repo a worktree belongs to by asking git
