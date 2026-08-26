@@ -31,8 +31,9 @@ func TestNewPickerCarriesABranchNameNotAPath(t *testing.T) {
 	if m.action != ActionNew {
 		t.Fatalf("action = %v, want ActionNew", m.action)
 	}
-	if m.chosen != "feature/thing" {
-		t.Errorf("chosen = %q, want the branch name", m.chosen)
+	// repo\tbranch: creating a branch needs a repo to create it in.
+	if m.chosen != "server\tfeature/thing" {
+		t.Errorf("chosen = %q, want \"server\\tfeature/thing\"", m.chosen)
 	}
 }
 

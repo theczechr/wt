@@ -252,13 +252,14 @@ func main() {
 		case ui.ActionResume:
 			handOff(path, session)
 		case ui.ActionNew:
-			// path is a BRANCH NAME here, not a directory: the worktree does
-			// not exist yet. Created on the same code path `wt <branch>`
-			// uses, so there is one implementation of create -- and outside
-			// the TUI, which has already exited, because a submodule clone
-			// plus post_create can run for minutes and its output is what
-			// the user wants to watch.
-			created, err := openBranch(cfg, path)
+			// path carries "repo\tbranch" here, not a directory: the
+			// worktree does not exist yet, and creating a branch needs a
+			// repo to create it in. Same tab encoding writeChoice uses.
+			// Run outside the TUI, which has already exited, because a
+			// submodule clone plus post_create runs for minutes and its
+			// output is what the user wants to watch.
+			repoName, branch, _ := strings.Cut(path, "\t")
+			created, err := openOrCreateBranch(cfg, repoName, branch)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "wt:", err)
 				os.Exit(1)
@@ -387,6 +388,52 @@ func openAndCd(cfg config.Config, branch string) {
 		os.Exit(1)
 	}
 	handOff(path, "")
+}
+
+// openOrCreateBranch opens branch if it exists anywhere, and creates it in
+// repoName otherwise.
+//
+// The split matters because `wt <branch>` deliberately refuses an unknown
+// branch: from a shell, a name that resolves nowhere is far more often a
+// typo than an intent to create, and silently creating a worktree for a
+// misspelling is the worse failure. Pressing "n" in the dashboard is an
+// unambiguous statement of intent, so it is the one path allowed to create.
+func openOrCreateBranch(cfg config.Config, repoName, branch string) (string, error) {
+	if err := resolve.ValidBranchName(branch); err != nil {
+		return "", err
+	}
+	if path, err := openBranch(cfg, branch); err == nil {
+		return path, nil
+	}
+	r, ok := cfg.Repos[repoName]
+	if !ok {
+		return "", fmt.Errorf("repo %q is not configured", repoName)
+	}
+	primary := primaryPath(cfg, repoName)
+	if primary == "" {
+		return "", fmt.Errorf("could not find repo %q on disk under any scan root %v", repoName, cfg.ScanRoots)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mutateTimeout)
+	defer cancel()
+
+	base, guessed := resolve.Base(ctx, r, primary)
+	fmt.Fprintf(os.Stderr, "wt: creating %s in %s from %s\n",
+		branch, repoName, resolve.DescribeBase(base, guessed))
+
+	target := filepath.Join(primary, r.EphemeralDirOrDefault(), bootstrap.Slug(branch))
+	if err := ephemeral.EnsureExcluded(ctx, primary,
+		[]string{r.EphemeralDirOrDefault() + "/", ephemeral.MarkerName}); err != nil {
+		return "", err
+	}
+	if err := bootstrap.CreateAt(ctx, primary, target, branch, base, r.ForEphemeral()); err != nil {
+		return "", fmt.Errorf("bootstrapping %s: %w (left in place for you to inspect or remove)", target, err)
+	}
+	if err := ephemeral.WriteMarker(target, ephemeral.Marker{
+		Repo: repoName, Branch: branch, Primary: primary, CreatedAt: time.Now(),
+	}); err != nil {
+		return "", fmt.Errorf("created %s but could not mark it ephemeral: %w", target, err)
+	}
+	return target, nil
 }
 
 // openBranch resolves branch to a worktree, creating an ephemeral one when

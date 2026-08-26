@@ -41,7 +41,9 @@ func (m uiModel) updateNew(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.newErr = err.Error()
 			return m, nil
 		}
-		m.chosen = branch
+		// repo\tbranch: creating a branch needs a repo to create it in,
+		// and the row under the cursor is the least surprising choice.
+		m.chosen = m.newRepo() + "\t" + branch
 		m.action = ActionNew
 		m.picker = pickerNone
 		return m, tea.Quit
@@ -76,7 +78,7 @@ func (m uiModel) viewNewPicker(width, outerHeight int) string {
 	content := make([]string, 0, rows+1)
 	content = append(content, renderPickerInput("New worktree, branch:", m.newQuery, inner))
 
-	msg := "existing branch is checked out; a new one is created from the default remote"
+	msg := "existing branch is opened; a new one is created in " + m.newRepo() + " from its base"
 	r := roleDim
 	if m.newErr != "" {
 		msg, r = m.newErr, roleAmber
@@ -86,4 +88,16 @@ func (m uiModel) viewNewPicker(width, outerHeight int) string {
 		content = append(content, styleFor(rolePlain, false).Render(padField("", inner)))
 	}
 	return renderPane("NEW", content, width, outerHeight)
+}
+
+// newRepo is the repo a new branch is created in: the one under the worktree
+// cursor. A dashboard row is always in some repo, so this is unambiguous in
+// the normal case; an empty list falls back to empty, which main reports as
+// an unconfigured repo rather than guessing.
+func (m uiModel) newRepo() string {
+	vis := m.visible()
+	if len(vis) == 0 || m.cursor >= len(vis) {
+		return ""
+	}
+	return vis[m.cursor].Repo
 }

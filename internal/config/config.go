@@ -30,6 +30,12 @@ type Repo struct {
 	// Nil means "key absent, fall back to PostCreate"; an explicitly empty
 	// list means "run nothing". TOML gives no other way to tell those apart,
 	// which is why this is not compared with len() anywhere.
+	// Base is the branch a NEW branch is cut from -- "develop", "master".
+	// Empty means "ask the remote what its default branch is"; see
+	// resolve.Base for why the primary checkout's own HEAD is only ever a
+	// last resort.
+	Base string `toml:"base"`
+
 	EphemeralPostCreate []string `toml:"ephemeral_post_create"`
 	DefaultRemote       string   `toml:"default_remote"`
 	Ephemeral           *bool    `toml:"ephemeral"`
