@@ -394,6 +394,7 @@ func openAndCd(cfg config.Config, branch string) {
 		fmt.Fprintln(os.Stderr, "wt:", err)
 		os.Exit(1)
 	}
+	reportDestination(branch, path)
 	handOff(path, "")
 }
 
@@ -402,6 +403,40 @@ func openAndCd(cfg config.Config, branch string) {
 func bootstrapBranchExists(ctx context.Context, primary, branch string) bool {
 	return exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", primary,
 		"show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
+}
+
+// reportDestination says where a branch resolved to, and it exists because
+// success was previously indistinguishable from failure.
+//
+// Normally the shell wrapper's cd is its own feedback: the prompt changes.
+// Two ordinary cases break that. A worktree directory need not be named
+// after the branch inside it -- git lets a branch move between worktrees, so
+// a directory created for one branch routinely ends up holding another, and
+// landing in ".worktrees/fix-paypal-dispute-dedupe" after asking for
+// feature/telemetry-ingestion looks like the wrong worktree rather than the
+// only one that can hold it. And running wt for the branch you are already
+// standing in prints nothing and moves nowhere, which reads as a no-op
+// failure.
+//
+// One line, to stderr so it never pollutes a piped stdout.
+func reportDestination(branch, path string) {
+	cwd, err := os.Getwd()
+	if err == nil && bootstrap.SamePath(cwd, path) {
+		fmt.Fprintf(os.Stderr, "wt: already here — %s is checked out in %s\n",
+			branch, filepath.Base(path))
+		return
+	}
+	name := filepath.Base(path)
+	if name == bootstrap.Slug(branch) || strings.Contains(name, bootstrap.Slug(branch)) {
+		// The directory is named after the branch; the changed prompt says
+		// everything, so stay quiet.
+		return
+	}
+	// The names disagree. Say so plainly: git permits exactly one worktree
+	// per branch, so this IS the right destination even though it does not
+	// look like it.
+	fmt.Fprintf(os.Stderr, "wt: %s is checked out in %s (directory name differs; a branch lives in only one worktree)\n",
+		branch, name)
 }
 
 // openOrCreateBranch opens branch if it exists anywhere, and creates it in
