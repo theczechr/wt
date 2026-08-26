@@ -38,7 +38,7 @@ func Slug(branch string) string {
 // caller's cwd instead of failing — so a blank primary would otherwise create
 // a worktree inside whatever repository the process happens to be standing
 // in, silently. See the "refuse rather than invent" design principle.
-func Create(ctx context.Context, primary, repoName, branch, name string, r config.Repo) (string, error) {
+func Create(ctx context.Context, primary, repoName, branch, name, startPoint string, r config.Repo) (string, error) {
 	if primary == "" {
 		return "", fmt.Errorf("no primary checkout found for repo %q; refusing to create a worktree relative to the current directory", repoName)
 	}
@@ -56,7 +56,7 @@ func Create(ctx context.Context, primary, repoName, branch, name string, r confi
 		name = repoName + "-" + Slug(branch)
 	}
 	target := filepath.Join(filepath.Dir(primary), name)
-	if err := CreateAt(ctx, primary, target, branch, "", r); err != nil {
+	if err := CreateAt(ctx, primary, target, branch, startPoint, r); err != nil {
 		// Report the path only when it actually exists: a failed `worktree
 		// add` leaves nothing behind, while a failed bootstrap leaves a real
 		// worktree the caller should be told to go and look at. Callers

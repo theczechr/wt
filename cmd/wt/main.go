@@ -137,7 +137,14 @@ func main() {
 			os.Exit(1)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), mutateTimeout)
-		target, err := bootstrap.Create(ctx, primary, repoName, branch, name, r)
+		// Same base resolution the dashboard's "n" uses. Without it this
+		// cut new branches from whatever the primary checkout happened to
+		// be sitting on, which is a mainline only by luck.
+		base, guessed := resolve.Base(ctx, r, primary)
+		if !bootstrapBranchExists(ctx, primary, branch) {
+			fmt.Fprintf(os.Stderr, "wt: creating %s from %s\n", branch, resolve.DescribeBase(base, guessed))
+		}
+		target, err := bootstrap.Create(ctx, primary, repoName, branch, name, base, r)
 		cancel()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "wt:", err)
@@ -388,6 +395,13 @@ func openAndCd(cfg config.Config, branch string) {
 		os.Exit(1)
 	}
 	handOff(path, "")
+}
+
+// bootstrapBranchExists reports whether branch already exists locally, so
+// `wt new` only announces a base when it is actually about to cut one.
+func bootstrapBranchExists(ctx context.Context, primary, branch string) bool {
+	return exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", primary,
+		"show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
 }
 
 // openOrCreateBranch opens branch if it exists anywhere, and creates it in

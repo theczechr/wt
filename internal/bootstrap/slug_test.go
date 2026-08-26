@@ -26,7 +26,7 @@ func TestCreateRejectsEmptyPrimary(t *testing.T) {
 	runGit(t, cwdRepo, "commit", "--allow-empty", "-q", "-m", "init")
 	t.Chdir(cwdRepo)
 
-	target, err := Create(context.Background(), "", "somerepo", "somebranch", "", config.Repo{})
+	target, err := Create(context.Background(), "", "somerepo", "somebranch", "", "", config.Repo{})
 	if err == nil {
 		t.Fatal("expected an error when primary is empty")
 	}
@@ -95,7 +95,7 @@ func TestCreateRejectsInvalidNames(t *testing.T) {
 	}
 	for i, c := range cases {
 		branch := fmt.Sprintf("branch-%d", i)
-		target, err := Create(context.Background(), primary, "backend", branch, c.name, config.Repo{})
+		target, err := Create(context.Background(), primary, "backend", branch, c.name, "", config.Repo{})
 		if err == nil {
 			t.Errorf("%s (%q): expected an error, got target %q", c.label, c.name, target)
 		}
@@ -133,7 +133,7 @@ func TestCreateAcceptsValidExplicitName(t *testing.T) {
 	runGit(t, primary, "init", "-q")
 	runGit(t, primary, "commit", "--allow-empty", "-q", "-m", "init")
 
-	target, err := Create(context.Background(), primary, "backend", "some-branch", "backend-my-custom-name", config.Repo{})
+	target, err := Create(context.Background(), primary, "backend", "some-branch", "backend-my-custom-name", "", config.Repo{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestCreateReturnsEmptyTargetWhenWorktreeAddFails(t *testing.T) {
 	// "bad..branch" is rejected by git's check-ref-format (a ref component
 	// may not contain ".."), so `worktree add -b` fails before anything is
 	// created on disk.
-	target, err := Create(context.Background(), primary, "backend", "bad..branch", "", config.Repo{})
+	target, err := Create(context.Background(), primary, "backend", "bad..branch", "", "", config.Repo{})
 	if err == nil {
 		t.Fatal("expected an error for an invalid branch name")
 	}
@@ -181,7 +181,7 @@ func TestCreateReturnsTargetWhenBootstrapFails(t *testing.T) {
 	runGit(t, primary, "init", "-q")
 	runGit(t, primary, "commit", "--allow-empty", "-q", "-m", "init")
 
-	target, err := Create(context.Background(), primary, "backend", "some-branch", "",
+	target, err := Create(context.Background(), primary, "backend", "some-branch", "", "",
 		config.Repo{PostCreate: []string{"exit 1"}})
 	if err == nil {
 		t.Fatal("expected an error when post_create fails")
