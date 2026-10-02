@@ -14,6 +14,7 @@ const (
 	KindSibling       Kind = "sibling"        // hand-made, e.g. acme/server-cache
 	KindNested        Kind = "nested"         // repo/.worktrees/*
 	KindClaudeManaged Kind = "claude-managed" // repo/.claude/worktrees/*
+	KindT3            Kind = "t3"             // T3 Code's ~/.t3/worktrees/<repo>/*
 	KindForeign       Kind = "foreign"        // anywhere else, e.g. ~/.sprout
 )
 
@@ -34,6 +35,9 @@ type Session struct {
 	Mtime      time.Time
 	Live       bool
 	PID        int
+	// Entrypoint is the newest "entrypoint" a transcript recorded: "cli" for
+	// the terminal, "sdk-ts" for an Agent SDK host such as T3 Code.
+	Entrypoint string
 
 	BytesScanned int // instrumentation: bytes read by the tail reader
 }
@@ -42,6 +46,17 @@ type Session struct {
 // AI-generated title, else a trimmed form of the last prompt, else the
 // session id. Claude Code does not write an ai-title for every session, so
 // Title alone is blank for roughly half of real sessions.
+// ResumableHere reports whether `claude --resume` from a terminal is the
+// right way back into this session. An SDK-hosted session (T3 Code) belongs
+// to its host app: resuming it here forks the conversation into a terminal
+// the host never sees, so the user should continue it in the host instead.
+func (s Session) ResumableHere() bool {
+	return s.Entrypoint != EntrypointSDK
+}
+
+// EntrypointSDK is the transcript entrypoint the TypeScript Agent SDK writes.
+const EntrypointSDK = "sdk-ts"
+
 func (s Session) Label() string {
 	if s.Title != "" {
 		return s.Title
@@ -205,6 +220,9 @@ func (w Workspace) PruneBlockers() []string {
 	var b []string
 	if w.Kind == KindPrimary {
 		b = append(b, "is the repo's primary checkout")
+	}
+	if w.Kind == KindT3 {
+		b = append(b, "is managed by T3 Code -- delete its thread there")
 	}
 	if !w.StatusKnown {
 		b = append(b, "git status could not be read")

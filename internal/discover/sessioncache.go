@@ -43,7 +43,9 @@ type SessionCache struct {
 // only one session cache file, since sessions aren't scoped to a single
 // repo the way PR state is.
 func sessionCachePath() string {
-	return filepath.Join(cacheRoot(), "sessions.json")
+	// v2 added Session.Entrypoint; a v1 entry would read as "" (a terminal
+	// session) until its transcript next changed.
+	return filepath.Join(cacheRoot(), "sessions-v2.json")
 }
 
 // LoadSessionCache reads the on-disk cache once. Any problem reading or

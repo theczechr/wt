@@ -27,6 +27,7 @@ type record struct {
 	PRNumber   int    `json:"prNumber"`
 	Cwd        string `json:"cwd"`
 	GitBranch  string `json:"gitBranch"`
+	Entrypoint string `json:"entrypoint"`
 }
 
 // ReadSessionTail reads a transcript backwards, collecting the last ai-title,
@@ -129,6 +130,9 @@ func parseLines(buf []byte, s *model.Session, atStart bool) found {
 			if s.Branch == "" {
 				s.Branch = r.GitBranch
 			}
+		}
+		if r.Entrypoint != "" && s.Entrypoint == "" {
+			s.Entrypoint = r.Entrypoint
 		}
 		if r.SessionID != "" && s.ID == "" {
 			s.ID = r.SessionID

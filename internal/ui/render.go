@@ -46,10 +46,12 @@ func kindRank(k model.Kind) int {
 		return 2
 	case model.KindClaudeManaged:
 		return 3
-	case model.KindForeign:
+	case model.KindT3:
 		return 4
-	default:
+	case model.KindForeign:
 		return 5
+	default:
+		return 6
 	}
 }
 
@@ -177,7 +179,7 @@ func rowMarker(w model.Workspace) (string, role) {
 
 func displayName(w model.Workspace) string {
 	name := filepath.Base(w.Path)
-	if w.Kind == model.KindNested || w.Kind == model.KindClaudeManaged {
+	if w.Kind == model.KindNested || w.Kind == model.KindClaudeManaged || w.Kind == model.KindT3 {
 		name = filepath.Join(filepath.Base(filepath.Dir(w.Path)), name)
 	}
 	return name
@@ -216,8 +218,11 @@ func rowDirty(w model.Workspace) string {
 // nowhere wired to an action, so it can never trigger a deletion.
 func rowTagParts(w model.Workspace) []tagPart {
 	var parts []tagPart
-	if w.Kind == model.KindClaudeManaged || w.Kind == model.KindForeign {
+	switch w.Kind {
+	case model.KindClaudeManaged, model.KindForeign:
 		parts = append(parts, tagPart{"⚠ agent", roleDim})
+	case model.KindT3:
+		parts = append(parts, tagPart{"t3", roleDim})
 	}
 	if tag, r, ok := agentTag(w); ok {
 		parts = append(parts, tagPart{tag, r})

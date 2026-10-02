@@ -101,6 +101,9 @@ func classify(path, primary string) model.Kind {
 	case strings.HasPrefix(path, primary+"/"):
 		return model.KindNested
 	}
+	if t3 := model.T3WorktreesDir(); t3 != "" && strings.HasPrefix(path, t3+"/") {
+		return model.KindT3
+	}
 	// A sibling lives in the same parent directory as the primary checkout.
 	cut := strings.LastIndex(primary, "/")
 	if cut > 0 && strings.HasPrefix(path, primary[:cut+1]) {

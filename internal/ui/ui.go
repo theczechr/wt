@@ -555,6 +555,10 @@ func (m uiModel) resumeSelected(vis []model.Workspace) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	s := sessions[m.sessionCursor]
+	if !s.ResumableHere() {
+		m.status = fmt.Sprintf("session %s runs in T3 Code — continue it there", s.Label())
+		return m, nil
+	}
 	if s.Live && !herdr.Running() {
 		m.status = fmt.Sprintf("session %s is live (pid %d) — can't attach without herdr owning the pty",
 			s.Label(), s.PID)
@@ -574,8 +578,13 @@ func (m uiModel) updateResume(vis []model.Workspace) (tea.Model, tea.Cmd) {
 
 	var newestIdle *model.Session
 	var liveSession *model.Session
+	hostOnly := 0
 	for i := range w.Sessions {
 		s := &w.Sessions[i]
+		if !s.ResumableHere() {
+			hostOnly++
+			continue
+		}
 		if s.Live {
 			if liveSession == nil {
 				liveSession = s
@@ -596,6 +605,8 @@ func (m uiModel) updateResume(vis []model.Workspace) (tea.Model, tea.Cmd) {
 	case liveSession != nil:
 		m.status = fmt.Sprintf("session %s is live (pid %d) at %s — can't attach, no tmux underneath it",
 			liveSession.Label(), liveSession.PID, w.Path)
+	case hostOnly > 0:
+		m.status = "this worktree's sessions run in T3 Code — continue them there"
 	default:
 		m.status = "no sessions in this worktree"
 	}
