@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/ephemeral"
-	"github.com/theczechr/wt/internal/gittest"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/ephemeral"
+	"github.com/theczechr/ephemera/internal/gittest"
 )
 
 func TestSweepRemovesOnlyTheReapableOne(t *testing.T) {

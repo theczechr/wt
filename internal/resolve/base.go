@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/theczechr/wt/internal/config"
+	"github.com/theczechr/ephemera/internal/config"
 )
 
 // Base resolves the start point a NEW branch should be cut from, and fetches

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/config"
+	"github.com/theczechr/ephemera/internal/config"
 )
 
 func TestLinkEnvSymlinksListedFilesAndCopiesOverrides(t *testing.T) {

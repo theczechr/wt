@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/theczechr/wt/internal/config"
+	"github.com/theczechr/ephemera/internal/config"
 )
 
 func git(t *testing.T, dir string, args ...string) {

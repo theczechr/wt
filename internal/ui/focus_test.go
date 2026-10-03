@@ -6,7 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 func key(s string) tea.KeyMsg {

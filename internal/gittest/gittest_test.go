@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/gittest"
+	"github.com/theczechr/ephemera/internal/gittest"
 )
 
 func TestNewProducesAClonedPrimaryWithAnOrigin(t *testing.T) {

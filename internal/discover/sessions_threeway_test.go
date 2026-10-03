@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // TestSessionsForMissingDirectoryIsNotAnError pins the benign half. A

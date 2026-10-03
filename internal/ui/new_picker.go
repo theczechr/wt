@@ -4,7 +4,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/theczechr/wt/internal/resolve"
+	"github.com/theczechr/ephemera/internal/resolve"
 )
 
 // The "new worktree" picker: a single text field for a branch name.

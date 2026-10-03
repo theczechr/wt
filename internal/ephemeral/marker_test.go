@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theczechr/wt/internal/ephemeral"
+	"github.com/theczechr/ephemera/internal/ephemeral"
 )
 
 func TestMarkerRoundTrip(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/theczechr/wt/internal/discover"
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/discover"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // snapshotPath lives next to the PR and session caches, under the same

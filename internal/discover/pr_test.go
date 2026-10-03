@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 func TestParsePRListKeysByBranch(t *testing.T) {

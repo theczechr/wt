@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/theczechr/wt/internal/herdr"
-	"github.com/theczechr/wt/internal/model"
-	"github.com/theczechr/wt/internal/trash"
+	"github.com/theczechr/ephemera/internal/herdr"
+	"github.com/theczechr/ephemera/internal/model"
+	"github.com/theczechr/ephemera/internal/trash"
 )
 
 // Action is what the user chose on exit.

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/discover"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/discover"
 )
 
 // Match is one repository that has the branch.

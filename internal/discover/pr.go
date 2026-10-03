@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 type prJSON struct {

@@ -87,7 +87,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 func classify(path, primary string) model.Kind {

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // chunkSize is how much of a transcript's tail is read per pass.

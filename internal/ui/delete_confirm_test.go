@@ -6,8 +6,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/theczechr/wt/internal/model"
-	"github.com/theczechr/wt/internal/trash"
+	"github.com/theczechr/ephemera/internal/model"
+	"github.com/theczechr/ephemera/internal/trash"
 )
 
 func deleteFixture() []model.Workspace {

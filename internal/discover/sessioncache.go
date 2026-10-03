@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // sessionCacheEntry is what's persisted per transcript: the parsed Session

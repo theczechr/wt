@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // [=\s]+ accepts both the space-separated form ("--session-id <uuid>") and

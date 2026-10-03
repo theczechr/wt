@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // runGit runs git against dir with a fixed, hermetic author/committer

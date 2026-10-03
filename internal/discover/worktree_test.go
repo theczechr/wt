@@ -3,7 +3,7 @@ package discover
 import (
 	"testing"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 const porcelain = `worktree /Users/alice/code/server

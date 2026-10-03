@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/theczechr/wt/internal/trash"
+	"github.com/theczechr/ephemera/internal/trash"
 )
 
 // updateTrash handles keys while the trash view owns input.
