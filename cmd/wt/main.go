@@ -257,6 +257,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, usage)
 			os.Exit(2)
 		}
+		if ref, ok := parsePRArg(cmd); ok {
+			openPRAndCd(cfg, ref)
+			return
+		}
 		openAndCd(cfg, cmd)
 	}
 }
@@ -502,7 +506,8 @@ func openBranchIn(cfg config.Config, primaries map[string]string, branch string)
 	switch {
 	case len(matches) == 0:
 		return "", fmt.Errorf("branch %q not found in any of %v (after fetching).\n"+
-			"If you meant a subcommand, the reserved words are: status, new, bootstrap, reap, open",
+			"If you meant a subcommand, the reserved words are: status, new, bootstrap, reap, open, hooks, timer, branches. "+
+			"A number opens a PR; use `wt open <name>` for a branch named like one.",
 			branch, repoNames(primaries))
 	case len(matches) > 1:
 		var err error
