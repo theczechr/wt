@@ -2,18 +2,25 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/theczechr/ephemera/internal/ui"
 )
 
-const hooksUsage = "usage: wt hooks install claude [--yes]"
+const (
+	hooksUsage        = "usage: wt hooks install claude [--yes]"
+	sessionEndTimeout = 30
+)
+
+var plainWordRe = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
 
 // claudeSettingsPath is $CLAUDE_CONFIG_DIR/settings.json, else
 // ~/.claude/settings.json.
@@ -25,10 +32,59 @@ func claudeSettingsPath() string {
 	return filepath.Join(home, ".claude", "settings.json")
 }
 
-// isWtReap matches a hook command that already runs `<anything>/wt reap`.
+// shellQuote makes s safe as one word in a POSIX shell command line. Paths
+// made only of plain characters are returned as-is.
+func shellQuote(s string) string {
+	if plainWordRe.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// hookCommand is the SessionEnd command line that runs exe's reap subcommand.
+func hookCommand(exe string) string {
+	return shellQuote(exe) + " reap"
+}
+
+// isWtReap matches a hook command that runs `<anything>/wt reap`, with the
+// program path optionally single- or double-quoted. The command must end in
+// the single word `reap`.
 func isWtReap(cmd string) bool {
-	f := strings.Fields(cmd)
-	return len(f) == 2 && filepath.Base(f[0]) == "wt" && f[1] == "reap"
+	prog, ok := strings.CutSuffix(strings.TrimSpace(cmd), " reap")
+	if !ok {
+		return false
+	}
+	prog = strings.TrimSpace(prog)
+	if n := len(prog); n >= 2 && (prog[0] == '\'' || prog[0] == '"') && prog[n-1] == prog[0] {
+		prog = prog[1 : n-1]
+	} else if strings.ContainsAny(prog, " \t") {
+		return false
+	}
+	return filepath.Base(prog) == "wt"
+}
+
+// sessionEndGroup is the settings.json hook group wt adds under SessionEnd.
+func sessionEndGroup(cmdline string) map[string]any {
+	return map[string]any{
+		"hooks": []any{map[string]any{
+			"type":    "command",
+			"command": cmdline,
+			"timeout": sessionEndTimeout,
+		}},
+	}
+}
+
+// encodeJSON pretty-prints v with two-space indentation, leaving <, > and &
+// unescaped so other hooks' commands keep their exact text.
+func encodeJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // mergeSessionEndHook adds a SessionEnd command hook running cmdline to a
@@ -43,6 +99,9 @@ func mergeSessionEndHook(body []byte, cmdline string) ([]byte, bool, error) {
 	if len(strings.TrimSpace(string(body))) > 0 {
 		if err := json.Unmarshal(body, &settings); err != nil {
 			return nil, false, fmt.Errorf("settings.json is not valid JSON: %w", err)
+		}
+		if settings == nil {
+			settings = map[string]any{}
 		}
 	}
 	hooks := map[string]any{}
@@ -71,16 +130,31 @@ func mergeSessionEndHook(body []byte, cmdline string) ([]byte, bool, error) {
 			}
 		}
 	}
-	groups = append(groups, map[string]any{
-		"hooks": []any{map[string]any{"type": "command", "command": cmdline}},
-	})
+	groups = append(groups, sessionEndGroup(cmdline))
 	hooks["SessionEnd"] = groups
 	settings["hooks"] = hooks
-	out, err := json.MarshalIndent(settings, "", "  ")
+	out, err := encodeJSON(settings)
 	if err != nil {
 		return nil, false, err
 	}
-	return append(out, '\n'), true, nil
+	return out, true, nil
+}
+
+// resolveSettingsTarget returns the file that holds the settings: path itself,
+// or what it links to, so that writes update a symlinked dotfile in place.
+// A dangling symlink is an error rather than a new file.
+func resolveSettingsTarget(path string) (string, error) {
+	target, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return target, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%s is a dangling symlink", path)
+	}
+	return path, nil
 }
 
 // runHooks implements `wt hooks install claude [--yes]`. It never edits the
@@ -105,23 +179,33 @@ func runHooks(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "wt: hooks:", err)
 		return 1
 	}
-	cmdline := exe + " reap"
+	cmdline := hookCommand(exe)
 	path := claudeSettingsPath()
-	body, err := os.ReadFile(path)
+	target, err := resolveSettingsTarget(path)
+	if err != nil {
+		fmt.Fprintln(stderr, "wt: hooks:", err)
+		return 1
+	}
+	body, err := os.ReadFile(target)
 	if err != nil && !os.IsNotExist(err) {
 		fmt.Fprintln(stderr, "wt: hooks:", err)
 		return 1
 	}
 	out, changed, err := mergeSessionEndHook(body, cmdline)
 	if err != nil {
-		fmt.Fprintf(stderr, "wt: hooks: %s: %v\n", path, err)
+		fmt.Fprintf(stderr, "wt: hooks: %s: %v\n", target, err)
 		return 1
 	}
 	if !changed {
-		fmt.Fprintf(stdout, "a `wt reap` SessionEnd hook is already in %s\n", path)
+		fmt.Fprintf(stdout, "a `wt reap` SessionEnd hook is already in %s\n", target)
 		return 0
 	}
-	fmt.Fprintf(stdout, "adds to %s:\n  SessionEnd → %s\n", path, cmdline)
+	snippet, err := encodeJSON(sessionEndGroup(cmdline))
+	if err != nil {
+		fmt.Fprintln(stderr, "wt: hooks:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "adds to %s under hooks.SessionEnd:\n%s", target, snippet)
 	if !yes {
 		if !ui.Interactive() {
 			fmt.Fprintln(stderr, "wt: hooks: not a terminal; rerun with --yes to apply")
@@ -134,26 +218,26 @@ func runHooks(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 0
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		fmt.Fprintln(stderr, "wt: hooks:", err)
 		return 1
 	}
 	if body != nil {
-		if err := os.WriteFile(path+".wt-backup", body, 0o600); err != nil {
+		if err := os.WriteFile(target+".wt-backup", body, 0o600); err != nil {
 			fmt.Fprintln(stderr, "wt: hooks: writing backup:", err)
 			return 1
 		}
 	}
-	tmp := path + ".wt-tmp"
+	tmp := target + ".wt-tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		fmt.Fprintln(stderr, "wt: hooks:", err)
 		return 1
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, target); err != nil {
 		os.Remove(tmp)
 		fmt.Fprintln(stderr, "wt: hooks:", err)
 		return 1
 	}
-	fmt.Fprintln(stdout, "installed; previous file saved as", path+".wt-backup")
+	fmt.Fprintln(stdout, "installed; previous file saved as", target+".wt-backup")
 	return 0
 }
