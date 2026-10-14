@@ -65,8 +65,12 @@ const (
 )
 
 type uiModel struct {
-	ws     []model.Workspace // master list, pre-sorted by Run
-	cursor int               // index into visible()
+	// orphans counts local branches with unpushed commits and no worktree
+	// (spec §2.5); orphanCount is its latest answer, shown in the footer.
+	orphans     func() int
+	orphanCount int
+	ws          []model.Workspace // master list, pre-sorted by Run
+	cursor      int               // index into visible()
 	// focus is which pane owns j/k and enter. The dashboard is a
 	// worktree list first and foremost, so worktrees is the zero value and
 	// every other key behaves identically in both focuses -- Tab only moves
@@ -187,6 +191,14 @@ type refreshedMsg struct {
 	unresolvedProcs int
 }
 
+// orphanCountMsg carries a completed orphans() call back into Update.
+type orphanCountMsg struct{ count int }
+
+func (m uiModel) orphanCmd() tea.Cmd {
+	f := m.orphans
+	return func() tea.Msg { return orphanCountMsg{count: f()} }
+}
+
 // deleteDoneMsg carries a completed SoftDelete/HardDelete back into Update.
 type deleteDoneMsg struct {
 	path  string
@@ -244,10 +256,14 @@ func (m uiModel) visible() []model.Workspace {
 // snapshot rather than a fresh Collect, so the real data needs to land as
 // soon as possible after the first frame.
 func (m uiModel) Init() tea.Cmd {
+	var cmds []tea.Cmd
 	if m.refreshing && m.refresh != nil {
-		return m.refreshCmd()
+		cmds = append(cmds, m.refreshCmd())
 	}
-	return nil
+	if m.orphans != nil {
+		cmds = append(cmds, m.orphanCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // refreshCmd runs m.refresh on bubbletea's own goroutine and reports the
@@ -265,7 +281,14 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case refreshedMsg:
-		return m.applyRefresh(msg.ws, msg.unresolvedProcs), nil
+		m = m.applyRefresh(msg.ws, msg.unresolvedProcs)
+		if m.orphans != nil {
+			return m, m.orphanCmd()
+		}
+		return m, nil
+	case orphanCountMsg:
+		m.orphanCount = msg.count
+		return m, nil
 	case deleteDoneMsg:
 		return m.applyDeleteResult(msg)
 	case restoreDoneMsg:
@@ -693,6 +716,9 @@ func (m uiModel) View() string {
 		footer = styleFor(roleOrange, false).Render(m.status)
 	default:
 		footer = styleFor(roleDim, false).Render(m.footerKeys())
+		if note := m.orphanNote(); note != "" {
+			footer += "  " + styleFor(roleOrange, false).Render(note)
+		}
 	}
 	// Shown regardless of mode, so a refresh in flight while filtering (or
 	// while a status line is up) is never hidden -- a stale view must never
@@ -912,6 +938,17 @@ func sortWorkspaces(ws []model.Workspace) []model.Workspace {
 	return sorted
 }
 
+func (m uiModel) orphanNote() string {
+	switch n := m.orphanCount; {
+	case n <= 0:
+		return ""
+	case n == 1:
+		return "⚠ 1 local branch with unpushed commits and no worktree (wt branches --unpushed)"
+	default:
+		return fmt.Sprintf("⚠ %d local branches with unpushed commits and no worktree (wt branches --unpushed)", n)
+	}
+}
+
 // Run displays the dashboard and returns the user's choice: the path to cd
 // into, what action to take there, and (for a resume) which session id.
 //
@@ -934,7 +971,7 @@ func sortWorkspaces(ws []model.Workspace) []model.Workspace {
 // immediately alongside ws for the same reason ws itself is -- 0 when ws
 // came from a persisted snapshot, replaced by the real count as soon as the
 // background refresh lands.
-func Run(ws []model.Workspace, needsRefresh bool, unresolvedProcs int, refresh func() ([]model.Workspace, int), ops TrashOps) (path string, action Action, sessionID string, err error) {
+func Run(ws []model.Workspace, needsRefresh bool, unresolvedProcs int, refresh func() ([]model.Workspace, int), ops TrashOps, orphans func() int) (path string, action Action, sessionID string, err error) {
 	mode := ops.Mode
 	if mode != "hard" {
 		mode = "soft"
@@ -949,6 +986,7 @@ func Run(ws []model.Workspace, needsRefresh bool, unresolvedProcs int, refresh f
 		del:             ops.Delete,
 		restore:         ops.Restore,
 		purge:           ops.Purge,
+		orphans:         orphans,
 	}
 	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {

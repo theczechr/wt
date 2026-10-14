@@ -212,7 +212,7 @@ func main() {
 			Restore: makeRestoreFunc(cfg),
 			Purge:   func(e trash.Entry) error { return trash.Remove(e) },
 		}
-		path, action, session, err := ui.Run(ws, needsRefresh, unresolvedProcs, refresh, ops)
+		path, action, session, err := ui.Run(ws, needsRefresh, unresolvedProcs, refresh, ops, func() int { return countOrphans(cfg) })
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "wt:", err)
 			os.Exit(1)
@@ -243,6 +243,8 @@ func main() {
 			os.Exit(2)
 		}
 		openAndCd(cfg, os.Args[2])
+	case "branches":
+		os.Exit(runBranches(cfg, os.Args[2:], os.Stdout, os.Stderr))
 	case "help", "-h", "--help":
 		// Asking for help is not a usage error: it goes to stdout so it can be
 		// piped or paged, and exits 0 so `wt --help && ...` works. The default
