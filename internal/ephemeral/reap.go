@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/theczechr/ephemera/internal/config"
 	"github.com/theczechr/ephemera/internal/discover"
@@ -28,6 +29,56 @@ type state struct {
 	marker   Marker
 	ws       model.Workspace
 	blockers []string
+	verdict  Verdict
+	// hasSubmodules selects `git worktree remove --force` (spec §4.1).
+	hasSubmodules bool
+	// deleteBranch is true when the branch is wt's own and fully on a
+	// remote (spec §4.2). Set by Task 7.
+	deleteBranch bool
+}
+
+// DefaultSweepGrace protects a worktree created or opened this recently
+// from sweeps. Without it, the sweep `wt <branch>` itself triggers could
+// remove the worktree it just made. The SessionEnd hook and `wt reap
+// <path>` apply none.
+const DefaultSweepGrace = 15 * time.Minute
+
+// InspectOptions tunes one inspection.
+type InspectOptions struct {
+	// ExcludeSessionID is the one session treated as already over. See Reap.
+	ExcludeSessionID string
+	Grace            time.Duration
+	// Now is "now" for the idle and grace checks; zero means time.Now().
+	Now time.Time
+}
+
+// Decision is one worktree's verdict, as printed by `wt reap --dry-run`
+// and logged to reap.log.
+type Decision struct {
+	Path     string   `json:"path"`
+	Repo     string   `json:"repo"`
+	Branch   string   `json:"branch"`
+	Reap     bool     `json:"reap"`
+	Reason   string   `json:"reason"`
+	Blockers []string `json:"blockers,omitempty"`
+}
+
+func (st state) decision(path string) Decision {
+	d := Decision{
+		Path: path, Repo: st.marker.Repo, Branch: st.marker.Branch,
+		Reap: len(st.blockers) == 0, Blockers: st.blockers,
+	}
+	if d.Reap {
+		d.Reason = st.verdict.Reason
+	} else {
+		d.Reason = strings.Join(st.blockers, "; ")
+	}
+	return d
+}
+
+// Inspect judges worktree without touching it.
+func Inspect(ctx context.Context, cfg config.Config, worktree string, opts InspectOptions) Decision {
+	return inspect(ctx, cfg, worktree, opts).decision(worktree)
 }
 
 // Blockers lists every reason worktree must not be removed. An empty result
@@ -40,7 +91,7 @@ func Blockers(ctx context.Context, cfg config.Config, worktree string) []string 
 // over. See Reap for why that exemption exists and why it is scoped to a
 // single id.
 func BlockersExcluding(ctx context.Context, cfg config.Config, worktree, excludeSessionID string) []string {
-	return inspect(ctx, cfg, worktree, excludeSessionID).blockers
+	return inspect(ctx, cfg, worktree, InspectOptions{ExcludeSessionID: excludeSessionID}).blockers
 }
 
 // inspect gathers the worktree's state once and judges it.
@@ -50,9 +101,9 @@ func BlockersExcluding(ctx context.Context, cfg config.Config, worktree, exclude
 // would be enough in a correct program, and requiring both means a single
 // bug cannot authorise a deletion.
 //
-// excludeSessionID names one Claude session that must not count as live --
+// opts.ExcludeSessionID names one Claude session that must not count as live --
 // empty for every caller but the SessionEnd hook. See Reap.
-func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID string) state {
+func inspect(ctx context.Context, cfg config.Config, worktree string, opts InspectOptions) state {
 	m, err := ReadMarker(worktree)
 	if err != nil {
 		return state{blockers: []string{fmt.Sprintf("no usable %s marker: %v", MarkerName, err)}}
@@ -83,6 +134,13 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 		b = append(b, fmt.Sprintf("%s is not a registered worktree of %s", worktree, m.Primary))
 	}
 
+	switch locked, err := isLocked(ctx, m.Primary, worktree); {
+	case err != nil:
+		b = append(b, fmt.Sprintf("could not read the worktree's lock state: %v", err))
+	case locked:
+		b = append(b, "worktree is locked (git worktree lock)")
+	}
+
 	dirty, err := dirtyCount(ctx, worktree)
 	if err != nil {
 		// Not "assume clean": a status that cannot be read is a state we
@@ -107,23 +165,23 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 		}
 	}
 
-	hasUpstream, ahead, err := upstreamState(ctx, worktree)
-	// Recorded on every path, including the error one, where it stays false --
-	// the same fail-closed polarity as StatusKnown. The delete confirmation
-	// reads it to warn about never-pushed work, and this is the only place it
-	// is computed, so leaving it unset would silently understate the risk.
-	ws.HasUpstream = hasUpstream
-	switch {
+	switch dirty, err := submodulesDirty(ctx, worktree); {
 	case err != nil:
-		b = append(b, fmt.Sprintf("could not read upstream state: %v", err))
-	case !hasUpstream:
-		// Ahead would read 0 here, indistinguishable from fully-pushed, while
-		// meaning every commit on this branch exists nowhere else.
-		b = append(b, "branch has no upstream, so nothing on it is known to be pushed")
-	case ahead > 0:
-		ws.Ahead = ahead
-		b = append(b, fmt.Sprintf("has %d unpushed commit(s)", ahead))
+		b = append(b, fmt.Sprintf("could not read submodule status: %v", err))
+	case dirty:
+		b = append(b, "a submodule has uncommitted or untracked changes")
 	}
+	hasSubs, err := hasSubmodules(ctx, worktree)
+	if err != nil {
+		b = append(b, fmt.Sprintf("could not read submodule state: %v", err))
+	}
+
+	// No longer a blocker (spec §2.1): the branch outlives the worktree, so
+	// neither an upstream nor an ahead count protects committed work. Still
+	// recorded, because the dashboard's delete confirmation reads them.
+	hasUpstream, ahead, _ := upstreamState(ctx, worktree)
+	ws.HasUpstream = hasUpstream
+	ws.Ahead = ahead
 
 	// The marker's Branch is written once, at creation, and never updated.
 	// If someone switches branches inside the ephemeral (git switch/checkout
@@ -178,7 +236,7 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 			sessionsUnreadable = true
 		}
 		for _, s := range found {
-			if seenSession[s.ID] || s.ID == excludeSessionID {
+			if seenSession[s.ID] || s.ID == opts.ExcludeSessionID {
 				continue
 			}
 			seenSession[s.ID] = true
@@ -210,7 +268,7 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 	// model.PruneBlockers, and that second layer is only real if the Workspace
 	// carries the sessions this one found.
 	for _, sp := range snap.SessionProcs {
-		if seenSession[sp.SessionID] || sp.SessionID == excludeSessionID {
+		if seenSession[sp.SessionID] || sp.SessionID == opts.ExcludeSessionID {
 			continue
 		}
 		pc := resolve(sp.Cwd)
@@ -243,7 +301,36 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 		b = append(b, fmt.Sprintf("has a running process: %s", ws.Procs[0].Command))
 	}
 
-	return state{marker: m, ws: ws, blockers: b}
+	st := state{marker: m, ws: ws, blockers: b, hasSubmodules: hasSubs}
+	if len(b) > 0 {
+		return st
+	}
+	// Only a worktree that is SAFE to remove is asked whether it is DONE.
+	own, err := OwnCommits(ctx, worktree, m)
+	if err != nil {
+		st.blockers = append(st.blockers, fmt.Sprintf("could not count your commits: %v", err))
+		return st
+	}
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	f := Facts{
+		OwnCommits: own,
+		LastUsed:   LastUsed(ctx, worktree, m, ws.Sessions),
+		OpenedAt:   openedAt(m),
+		Grace:      opts.Grace,
+		IdleDays:   cfg.EffectiveIdleDays(m.Repo),
+		Now:        now,
+	}
+	if own > 0 {
+		f.PRState = PRState(ctx, m.Primary, m)
+	}
+	st.verdict = Decide(f)
+	if !st.verdict.Done {
+		st.blockers = append(st.blockers, "not done yet: "+st.verdict.Reason)
+	}
+	return st
 }
 
 // Reap removes worktree if and only if Blockers is empty.
@@ -270,14 +357,24 @@ func inspect(ctx context.Context, cfg config.Config, worktree, excludeSessionID 
 // second terminal working in the same tree). Callers with no such session --
 // Sweep, and `wt reap <path>` typed by hand -- pass "".
 func Reap(ctx context.Context, cfg config.Config, worktree, excludeSessionID string) error {
-	st := inspect(ctx, cfg, worktree, excludeSessionID)
-	if len(st.blockers) > 0 {
-		return fmt.Errorf("refusing to remove %s: %s", worktree, strings.Join(st.blockers, "; "))
+	_, err := ReapWith(ctx, cfg, worktree, InspectOptions{ExcludeSessionID: excludeSessionID})
+	return err
+}
+
+// ReapWith removes worktree if and only if inspection finds no blockers. The
+// inspection runs here, immediately before removal, never earlier (spec
+// §3.4): a session opened mid-sweep still blocks.
+func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts InspectOptions) (Decision, error) {
+	st := inspect(ctx, cfg, worktree, opts)
+	d := st.decision(worktree)
+	if !d.Reap {
+		return d, fmt.Errorf("refusing to remove %s: %s", worktree, strings.Join(st.blockers, "; "))
 	}
 	if _, err := trash.SoftDelete(ctx, st.ws, st.marker.Primary); err != nil {
-		return fmt.Errorf("soft-deleting %s: %w", worktree, err)
+		d.Reap, d.Reason = false, err.Error()
+		return d, fmt.Errorf("soft-deleting %s: %w", worktree, err)
 	}
-	return nil
+	return d, nil
 }
 
 // dirtyCount counts changed paths in the worktree. The error return is not
@@ -285,7 +382,7 @@ func Reap(ctx context.Context, cfg config.Config, worktree, excludeSessionID str
 // exactly where discover.FillStatus goes wrong by collapsing both to 0.
 func dirtyCount(ctx context.Context, worktree string) (int, error) {
 	out, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", worktree,
-		"status", "--porcelain").Output()
+		"status", "--porcelain", "--ignore-submodules=none").Output()
 	if err != nil {
 		return 0, withStderr(err)
 	}

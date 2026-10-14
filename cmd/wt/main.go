@@ -238,7 +238,8 @@ func main() {
 			// whole point is that the first frame paints from a snapshot
 			// without waiting on git. Sweeping here costs the user nothing
 			// they can see.
-			ephemeral.Sweep(ctx, cfg, resolve.Primaries(cfg))
+			_, _ = ephemeral.Sweep(ctx, cfg, resolve.Primaries(cfg),
+				ephemeral.SweepOptions{Grace: ephemeral.DefaultSweepGrace})
 			return aggregate.Collect(ctx, cfg)
 		}
 		ops := ui.TrashOps{

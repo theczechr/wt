@@ -4,19 +4,28 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/theczechr/ephemera/internal/config"
 )
 
 // Sweep removes every ephemeral worktree that passes the reap predicate,
-// returning the paths removed.
+// returning one Decision per worktree it inspected (or, with DryRun, would
+// have).
 //
 // This is not a duplicate of the SessionEnd hook but its backstop: the hook
 // is not documented to run after a crash, a SIGKILL, or a reboot, and a
 // worktree missed then would otherwise live forever. Both paths go through
-// Reap, so both are bound by the same checks.
-func Sweep(ctx context.Context, cfg config.Config, primaries map[string]string) []string {
-	var removed []string
+// ReapWith, so both are bound by the same checks.
+//
+// SweepOptions tunes a sweep.
+type SweepOptions struct {
+	DryRun bool
+	Grace  time.Duration
+}
+
+func Sweep(ctx context.Context, cfg config.Config, primaries map[string]string, opts SweepOptions) ([]Decision, error) {
+	var out []Decision
 	for name, primary := range primaries {
 		r, ok := cfg.Repos[name]
 		if !ok || !r.EphemeralEnabled() {
@@ -38,13 +47,15 @@ func Sweep(ctx context.Context, cfg config.Config, primaries map[string]string) 
 			// No session exemption: a sweep runs from a `wt` launch, not from
 			// a session's own SessionEnd hook, so every live session it can
 			// see is somebody else's and must block.
-			if err := Reap(ctx, cfg, path, ""); err != nil {
-				LogReap(path, err)
+			io := InspectOptions{Grace: opts.Grace}
+			if opts.DryRun {
+				out = append(out, Inspect(ctx, cfg, path, io))
 				continue
 			}
-			LogReap(path, nil)
-			removed = append(removed, path)
+			d, err := ReapWith(ctx, cfg, path, io)
+			LogReap(path, err)
+			out = append(out, d)
 		}
 	}
-	return removed
+	return out, nil
 }

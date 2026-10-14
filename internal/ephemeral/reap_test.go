@@ -49,6 +49,9 @@ func blockerContaining(b []string, substr string) string {
 func newEphemeral(t *testing.T, r *gittest.Repo, branch string) (config.Config, string) {
 	t.Helper()
 	t.Setenv("WT_CACHE_DIR", t.TempDir())
+	t.Cleanup(ephemeral.SetPRStateLookupForTest(func(context.Context, string, ephemeral.Marker) (string, error) {
+		return "", nil
+	}))
 	wt := filepath.Join(r.Primary, ".worktrees", strings.ReplaceAll(branch, "/", "-"))
 	r.PushNewBranch(t, branch)
 	r.Git(t, r.Primary, "fetch", "-q", "origin")
@@ -96,25 +99,80 @@ func TestBlockersRefusesUntrackedFile(t *testing.T) {
 	}
 }
 
-// The trap from the spec: no upstream yields Ahead == 0, identical to a
-// fully-pushed branch, while being the most unpushed state possible.
-func TestBlockersRefusesBranchWithNoUpstream(t *testing.T) {
+// Regression fixture for the 277 "branch has no upstream" refusals in
+// reap.log: a review worktree with no upstream and no commits of yours is
+// done. The branch outlives the worktree, so nothing is lost.
+func TestBlockersReapsNoUpstreamWithoutOwnCommits(t *testing.T) {
 	r := gittest.New(t)
 	cfg, wt := newEphemeral(t, r, "feat/no-upstream")
 	r.Git(t, wt, "branch", "--unset-upstream")
-	r.WriteCommit(t, wt, "local-only.txt", "work that exists nowhere else")
-	b := ephemeral.Blockers(context.Background(), cfg, wt)
-	if len(b) == 0 {
-		t.Fatal("a branch with no upstream must never be reaped: every commit is unpushed")
+	if b := ephemeral.Blockers(context.Background(), cfg, wt); len(b) != 0 {
+		t.Fatalf("want no blockers for a no-upstream review worktree, got %v", b)
 	}
 }
 
-func TestBlockersRefusesUnpushedCommits(t *testing.T) {
+func TestBlockersKeepsOwnUnpushedWorkUntilDone(t *testing.T) {
 	r := gittest.New(t)
 	cfg, wt := newEphemeral(t, r, "feat/ahead")
 	r.WriteCommit(t, wt, "ahead.txt", "not pushed")
-	if b := ephemeral.Blockers(context.Background(), cfg, wt); len(b) == 0 {
-		t.Fatal("unpushed commits must block removal")
+	b := ephemeral.Blockers(context.Background(), cfg, wt)
+	if !blockersContain(b, "not done yet") {
+		t.Fatalf("own commits, no PR, fresh: want a 'not done yet' blocker, got %v", b)
+	}
+}
+
+func TestInspectReapsOwnWorkOncePRMerged(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/merged")
+	r.WriteCommit(t, wt, "ahead.txt", "x")
+	t.Cleanup(ephemeral.SetPRStateLookupForTest(func(context.Context, string, ephemeral.Marker) (string, error) {
+		return "MERGED", nil
+	}))
+	d := ephemeral.Inspect(context.Background(), cfg, wt, ephemeral.InspectOptions{})
+	if !d.Reap || d.Reason != "PR merged" {
+		t.Fatalf("got %+v, want reap with reason 'PR merged'", d)
+	}
+}
+
+func TestInspectReapsOwnWorkAfterIdleDays(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/idle")
+	r.WriteCommit(t, wt, "ahead.txt", "x")
+	d := ephemeral.Inspect(context.Background(), cfg, wt, ephemeral.InspectOptions{
+		Now: time.Now().Add(4 * 24 * time.Hour),
+	})
+	if !d.Reap || !strings.Contains(d.Reason, "idle") {
+		t.Fatalf("got %+v, want reap for being idle past 3 days", d)
+	}
+}
+
+func TestBlockersRefusesLockedWorktree(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/locked")
+	r.Git(t, r.Primary, "worktree", "lock", wt)
+	if b := ephemeral.Blockers(context.Background(), cfg, wt); !blockersContain(b, "locked") {
+		t.Fatalf("a locked worktree must be refused, got %v", b)
+	}
+}
+
+func TestSweepGraceProtectsAFreshWorktree(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/fresh")
+	d := ephemeral.Inspect(context.Background(), cfg, wt, ephemeral.InspectOptions{Grace: ephemeral.DefaultSweepGrace})
+	if d.Reap || !strings.Contains(d.Reason, "grace") {
+		t.Fatalf("a worktree created moments ago must survive a sweep, got %+v", d)
+	}
+}
+
+func TestInspectReportsBlockersAsReason(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/dirty-reason")
+	if err := os.WriteFile(filepath.Join(wt, "wip.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := ephemeral.Inspect(context.Background(), cfg, wt, ephemeral.InspectOptions{})
+	if d.Reap || !strings.Contains(d.Reason, "uncommitted") || d.Repo != "demo" || d.Branch != "feat/dirty-reason" {
+		t.Fatalf("got %+v", d)
 	}
 }
 
