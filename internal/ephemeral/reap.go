@@ -200,106 +200,9 @@ func inspect(ctx context.Context, cfg config.Config, worktree string, opts Inspe
 		b = append(b, fmt.Sprintf("checked-out branch %q does not match the marker's %q", branch, m.Branch))
 	}
 
-	// One snapshot, feeding both checks and the Workspace. Snapshot forks ps
-	// and lsof, so calling it twice would double the cost of every reap for
-	// no new information. SnapshotErr (not Snapshot) is used deliberately: a
-	// failed ps must read as "couldn't check", never as "nothing running" --
-	// the same FillStatus-shaped trap this task exists to close, reproduced
-	// here for processes instead of git status.
-	snap, snapErr := discover.SnapshotErr(ctx)
-	if snapErr != nil {
-		b = append(b, fmt.Sprintf("could not enumerate processes: %v", snapErr))
-	}
-
-	// worktree can legitimately reach here in two forms: the one wt created
-	// it with, and the OS-resolved form lsof and a shell hand back (macOS
-	// resolves /var to /private/var, and t.TempDir() sits under it). Claude
-	// Code's session directory name is a literal character-for-character
-	// flatten of whichever cwd form the user actually typed (ProjectDirName),
-	// so only one form may have a matching directory; query both and dedupe
-	// by session ID rather than guessing which one applies here.
-	rw := resolve(worktree)
-	queryPaths := []string{worktree}
-	if rw != worktree {
-		queryPaths = append(queryPaths, rw)
-	}
-	seenSession := map[string]bool{}
-	sessionsUnreadable := false
-	for _, qp := range queryPaths {
-		found, err := discover.SessionsFor(qp, nil)
-		if err != nil {
-			// Unreadable, not empty. Recorded as a blocker outright: this
-			// function's whole job is deciding whether a worktree may be
-			// deleted, and a session probe that could not run says nothing
-			// about what is living in it.
-			b = append(b, "Claude sessions could not be read: "+err.Error())
-			sessionsUnreadable = true
-		}
-		for _, s := range found {
-			if seenSession[s.ID] || s.ID == opts.ExcludeSessionID {
-				continue
-			}
-			seenSession[s.ID] = true
-			if pid, running := snap.Live[s.ID]; running {
-				s.Live, s.PID = true, pid
-			}
-			ws.Sessions = append(ws.Sessions, s)
-		}
-	}
-
-	// Transcript discovery above is necessary but nowhere near sufficient. It
-	// finds a session only when ~/.claude/projects holds a directory whose
-	// name is a flatten of the worktree root, and there are three ordinary
-	// ways a live session has no such directory: it was launched from a
-	// subdirectory (the spec explicitly allows cwd to be one, and the name is
-	// then a flatten of THAT path); it has not written its first message yet,
-	// so the directory does not exist; or ~/.claude/projects is unreadable and
-	// SessionsFor's ReadDir error becomes a nil slice. All three read as "no
-	// session" and authorise a deletion -- the same failed-probe-means-safe
-	// trap already closed for git status and for ps.
-	//
-	// The process table has none of those blind spots: wt has already resolved
-	// the cwd of every Claude process, so a session running at or under this
-	// worktree is a fact, not an inference. Matched with the same
-	// resolved-to-resolved comparison as the process loop below, so a
-	// subdirectory is handled identically.
-	//
-	// Appended to ws.Sessions rather than only to b: trash.SoftDelete re-checks
-	// model.PruneBlockers, and that second layer is only real if the Workspace
-	// carries the sessions this one found.
-	for _, sp := range snap.SessionProcs {
-		if seenSession[sp.SessionID] || sp.SessionID == opts.ExcludeSessionID {
-			continue
-		}
-		pc := resolve(sp.Cwd)
-		if pc != rw && !strings.HasPrefix(pc, rw+string(filepath.Separator)) {
-			continue
-		}
-		seenSession[sp.SessionID] = true
-		ws.Sessions = append(ws.Sessions, model.Session{
-			ID: sp.SessionID, Cwd: sp.Cwd, Live: true, PID: sp.PID,
-		})
-	}
-	// The Workspace handed to trash.SoftDelete re-runs PruneBlockers, whose
-	// !SessionsKnown check is only meaningful if this probe's outcome
-	// travels with it. Known exactly when every queried path answered.
-	ws.SessionsKnown = !sessionsUnreadable
-	if ws.HasLiveSession() {
-		b = append(b, "has a live Claude session")
-	}
-	// p.Cwd, from discover.CwdOf's lsof call, is the resolved vnode path, not
-	// necessarily the form worktree was given in -- compare resolved to
-	// resolved like every other path comparison in this file (see resolve's
-	// own doc comment), not the raw strings.
-	for _, p := range snap.Procs {
-		pc := resolve(p.Cwd)
-		if pc == rw || strings.HasPrefix(pc, rw+string(filepath.Separator)) {
-			ws.Procs = append(ws.Procs, p)
-		}
-	}
-	if len(ws.Procs) > 0 {
-		b = append(b, fmt.Sprintf("has a running process: %s", ws.Procs[0].Command))
-	}
+	sessions, procs, sessionsKnown, liveBlockers := probeLiveness(ctx, worktree, opts.ExcludeSessionID)
+	ws.Sessions, ws.Procs, ws.SessionsKnown = sessions, procs, sessionsKnown
+	b = append(b, liveBlockers...)
 
 	st := state{marker: m, ws: ws, blockers: b, hasSubmodules: hasSubs}
 	if len(b) > 0 {
@@ -340,6 +243,115 @@ func inspect(ctx context.Context, cfg config.Config, worktree string, opts Inspe
 	return st
 }
 
+// probeLiveness reports every Claude session and process living at or under
+// worktree, and the blockers they (or a failed probe) impose. It is its own
+// function so ReapWith can run it a second time immediately before removal
+// (spec §3.4): the slow PR lookup in inspect sits between the first probe and
+// the removal, and a session started in that window must still block.
+func probeLiveness(ctx context.Context, worktree, excludeSessionID string) (sessions []model.Session, procs []model.Proc, sessionsKnown bool, blockers []string) {
+	// One snapshot, feeding both checks and the Workspace. Snapshot forks ps
+	// and lsof, so calling it twice would double the cost of every reap for
+	// no new information. SnapshotErr (not Snapshot) is used deliberately: a
+	// failed ps must read as "couldn't check", never as "nothing running" --
+	// the same FillStatus-shaped trap this task exists to close, reproduced
+	// here for processes instead of git status.
+	snap, snapErr := discover.SnapshotErr(ctx)
+	if snapErr != nil {
+		blockers = append(blockers, fmt.Sprintf("could not enumerate processes: %v", snapErr))
+	}
+
+	// worktree can legitimately reach here in two forms: the one wt created
+	// it with, and the OS-resolved form lsof and a shell hand back (macOS
+	// resolves /var to /private/var, and t.TempDir() sits under it). Claude
+	// Code's session directory name is a literal character-for-character
+	// flatten of whichever cwd form the user actually typed (ProjectDirName),
+	// so only one form may have a matching directory; query both and dedupe
+	// by session ID rather than guessing which one applies here.
+	rw := resolve(worktree)
+	queryPaths := []string{worktree}
+	if rw != worktree {
+		queryPaths = append(queryPaths, rw)
+	}
+	seenSession := map[string]bool{}
+	sessionsUnreadable := false
+	for _, qp := range queryPaths {
+		found, err := discover.SessionsFor(qp, nil)
+		if err != nil {
+			// Unreadable, not empty. Recorded as a blocker outright: this
+			// function's whole job is deciding whether a worktree may be
+			// deleted, and a session probe that could not run says nothing
+			// about what is living in it.
+			blockers = append(blockers, "Claude sessions could not be read: "+err.Error())
+			sessionsUnreadable = true
+		}
+		for _, s := range found {
+			if seenSession[s.ID] || s.ID == excludeSessionID {
+				continue
+			}
+			seenSession[s.ID] = true
+			if pid, running := snap.Live[s.ID]; running {
+				s.Live, s.PID = true, pid
+			}
+			sessions = append(sessions, s)
+		}
+	}
+
+	// Transcript discovery above is necessary but nowhere near sufficient. It
+	// finds a session only when ~/.claude/projects holds a directory whose
+	// name is a flatten of the worktree root, and there are three ordinary
+	// ways a live session has no such directory: it was launched from a
+	// subdirectory (the spec explicitly allows cwd to be one, and the name is
+	// then a flatten of THAT path); it has not written its first message yet,
+	// so the directory does not exist; or ~/.claude/projects is unreadable and
+	// SessionsFor's ReadDir error becomes a nil slice. All three read as "no
+	// session" and authorise a deletion -- the same failed-probe-means-safe
+	// trap already closed for git status and for ps.
+	//
+	// The process table has none of those blind spots: wt has already resolved
+	// the cwd of every Claude process, so a session running at or under this
+	// worktree is a fact, not an inference. Matched with the same
+	// resolved-to-resolved comparison as the process loop below, so a
+	// subdirectory is handled identically.
+	//
+	// Appended to ws.Sessions rather than only to b: trash.SoftDelete re-checks
+	// model.PruneBlockers, and that second layer is only real if the Workspace
+	// carries the sessions this one found.
+	for _, sp := range snap.SessionProcs {
+		if seenSession[sp.SessionID] || sp.SessionID == excludeSessionID {
+			continue
+		}
+		pc := resolve(sp.Cwd)
+		if pc != rw && !strings.HasPrefix(pc, rw+string(filepath.Separator)) {
+			continue
+		}
+		seenSession[sp.SessionID] = true
+		sessions = append(sessions, model.Session{
+			ID: sp.SessionID, Cwd: sp.Cwd, Live: true, PID: sp.PID,
+		})
+	}
+	// The Workspace handed to trash.SoftDelete re-runs PruneBlockers, whose
+	// !SessionsKnown check is only meaningful if this probe's outcome
+	// travels with it. Known exactly when every queried path answered.
+	sessionsKnown = !sessionsUnreadable
+	if (model.Workspace{Sessions: sessions}).HasLiveSession() {
+		blockers = append(blockers, "has a live Claude session")
+	}
+	// p.Cwd, from discover.CwdOf's lsof call, is the resolved vnode path, not
+	// necessarily the form worktree was given in -- compare resolved to
+	// resolved like every other path comparison in this file (see resolve's
+	// own doc comment), not the raw strings.
+	for _, p := range snap.Procs {
+		pc := resolve(p.Cwd)
+		if pc == rw || strings.HasPrefix(pc, rw+string(filepath.Separator)) {
+			procs = append(procs, p)
+		}
+	}
+	if len(procs) > 0 {
+		blockers = append(blockers, fmt.Sprintf("has a running process: %s", procs[0].Command))
+	}
+	return sessions, procs, sessionsKnown, blockers
+}
+
 // Reap removes worktree if and only if Blockers is empty.
 //
 // Removal goes through trash.SoftDelete rather than a direct `git worktree
@@ -368,6 +380,10 @@ func Reap(ctx context.Context, cfg config.Config, worktree, excludeSessionID str
 	return err
 }
 
+// beforeRemoval is a test seam: called right before the final liveness
+// re-probe, so a test can start a process inside the removal window.
+var beforeRemoval = func(string) {}
+
 // ReapWith removes worktree if and only if inspection finds no blockers. The
 // inspection runs here, immediately before removal, never earlier (spec
 // §3.4): a session opened mid-sweep still blocks.
@@ -376,6 +392,11 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 	d := st.decision(worktree)
 	if !d.Reap {
 		return d, fmt.Errorf("refusing to remove %s: %s", worktree, strings.Join(st.blockers, "; "))
+	}
+	beforeRemoval(worktree)
+	if _, _, _, busy := probeLiveness(ctx, worktree, opts.ExcludeSessionID); len(busy) > 0 {
+		d.Reap, d.Reason = false, "became busy before removal: "+strings.Join(busy, "; ")
+		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
 	}
 	ro := trash.RemoveOptions{Force: st.hasSubmodules, DeleteBranch: st.deleteBranch, PR: st.marker.PR}
 	if _, err := trash.SoftDeleteWith(ctx, st.ws, st.marker.Primary, ro); err != nil {

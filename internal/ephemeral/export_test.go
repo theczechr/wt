@@ -9,3 +9,11 @@ func SetPRStateLookupForTest(f func(ctx context.Context, primary string, m Marke
 	prStateLookup = f
 	return func() { prStateLookup = old }
 }
+
+// SetBeforeRemovalForTest installs a hook run in ReapWith just before the
+// final liveness re-probe and returns a function restoring the original.
+func SetBeforeRemovalForTest(f func(worktree string)) (restore func()) {
+	old := beforeRemoval
+	beforeRemoval = f
+	return func() { beforeRemoval = old }
+}

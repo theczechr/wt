@@ -3,7 +3,9 @@ package ephemeral_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,5 +91,48 @@ func TestReapNeverDeletesABranchWTDidNotCreate(t *testing.T) {
 	}
 	if _, err := r.TryGit(r.Primary, "show-ref", "--verify", "--quiet", "refs/heads/feat/users-own"); err != nil {
 		t.Error("a branch wt did not create must survive the reap")
+	}
+}
+
+// A process that appears after inspect's probes but before removal (the PR
+// lookup is a network call in that window) must still block the reap.
+func TestReapRefusesWhenAProcessStartsBeforeRemoval(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/busy-late")
+
+	src := filepath.Join(t.TempDir(), "sleeper.go")
+	program := "package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(time.Minute) }\n"
+	if err := os.WriteFile(src, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cmd *exec.Cmd
+	restore := ephemeral.SetBeforeRemovalForTest(func(string) {
+		cmd = exec.Command("go", "run", src)
+		cmd.Dir = wt
+		if err := cmd.Start(); err != nil {
+			t.Errorf("could not start the child: %v", err)
+			return
+		}
+		waitForBlocker(t, func() []string {
+			return ephemeral.Blockers(context.Background(), cfg, wt)
+		}, "running process")
+	})
+	defer restore()
+	t.Cleanup(func() {
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+
+	d, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()})
+	if err == nil || !strings.Contains(err.Error(), "became busy") {
+		t.Fatalf("err = %v, want a 'became busy' refusal", err)
+	}
+	if d.Reap {
+		t.Errorf("decision must not say reap: %+v", d)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Error("the worktree must still exist:", statErr)
 	}
 }
