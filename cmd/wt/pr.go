@@ -248,7 +248,8 @@ func updateToPRHead(ctx context.Context, wt, primary, remote string, pr ghPR, st
 	if err != nil || head == pr.HeadRefOid {
 		return
 	}
-	status, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", wt, "status", "--porcelain").Output()
+	status, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", wt,
+		"status", "--porcelain", "--untracked-files=all").Output()
 	own := 1
 	if m, merr := ephemeral.ReadMarker(wt); merr == nil {
 		if n, oerr := ephemeral.OwnCommits(ctx, wt, m); oerr == nil {

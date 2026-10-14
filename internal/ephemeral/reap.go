@@ -441,9 +441,13 @@ func recheckClean(ctx context.Context, worktree string) []string {
 // dirtyCount counts changed paths in the worktree. The error return is not
 // incidental: callers must distinguish "clean" from "unknown", and this is
 // exactly where discover.FillStatus goes wrong by collapsing both to 0.
+//
+// --untracked-files=all overrides status.showUntrackedFiles: with that set to
+// "no", a plain status omits untracked files and `git worktree remove` then
+// deletes them without complaint (verified, git 2.50.1).
 func dirtyCount(ctx context.Context, worktree string) (int, error) {
 	out, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", worktree,
-		"status", "--porcelain", "--ignore-submodules=none").Output()
+		"status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all").Output()
 	if err != nil {
 		return 0, withStderr(err)
 	}

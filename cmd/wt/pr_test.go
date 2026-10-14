@@ -251,3 +251,33 @@ func TestOpenPRKeepsFastForwardingWhenTheUserAuthoredThePR(t *testing.T) {
 		t.Errorf("second update: HEAD = %s, want %s", got, sha3)
 	}
 }
+
+// status.showUntrackedFiles=no must not make an untracked file invisible to
+// the "loses nothing" check.
+func TestOpenPRAgainSeesUntrackedFilesUnderShowUntrackedNo(t *testing.T) {
+	t.Setenv("WT_CACHE_DIR", t.TempDir())
+	r := gittest.New(t)
+	sha := forkPR(t, r, 7, "one.txt")
+	fakeGH(t, ghJSON(7, "main", sha, true))
+	cfg := cfgFor(r, config.Repo{})
+	path, err := openPR(cfg, prRef{Number: 7}, r.Primary, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Git(t, r.Primary, "config", "status.showUntrackedFiles", "no")
+	if err := os.WriteFile(filepath.Join(path, "notes.txt"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.Git(t, r.Origin, "checkout", "-q", "-b", "tmp2", sha)
+	r.WriteCommit(t, r.Origin, "two.txt", "y")
+	sha2 := strings.TrimSpace(r.Git(t, r.Origin, "rev-parse", "HEAD"))
+	r.Git(t, r.Origin, "update-ref", "refs/pull/7/head", sha2)
+	r.Git(t, r.Origin, "checkout", "-q", "main")
+	fakeGH(t, ghJSON(7, "main", sha2, true))
+	if _, err := openPR(cfg, prRef{Number: 7}, r.Primary, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(r.Git(t, path, "rev-parse", "HEAD")); got != sha {
+		t.Errorf("HEAD moved to %s; an untracked file must count as local work", got)
+	}
+}

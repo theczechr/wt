@@ -186,9 +186,10 @@ func hasSubmodules(ctx context.Context, worktree string) (bool, error) {
 // submodule, recursively (spec §2.1). The superproject's own status already
 // reports " M sub" for untracked content in a submodule (verified), so this
 // is a second, independent layer -- the one --force removal leans on.
+// --untracked-files=all for the same reason as dirtyCount.
 func submodulesDirty(ctx context.Context, worktree string) (bool, error) {
 	out, err := gitOut(ctx, worktree, "submodule", "foreach", "--quiet", "--recursive",
-		"git status --porcelain --ignore-submodules=none")
+		"git status --porcelain --ignore-submodules=none --untracked-files=all")
 	if err != nil {
 		return false, err
 	}
