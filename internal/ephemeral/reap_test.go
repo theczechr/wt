@@ -49,6 +49,7 @@ func blockerContaining(b []string, substr string) string {
 func newEphemeral(t *testing.T, r *gittest.Repo, branch string) (config.Config, string) {
 	t.Helper()
 	t.Setenv("WT_CACHE_DIR", t.TempDir())
+	t.Setenv("WT_STATE_DIR", t.TempDir())
 	t.Cleanup(ephemeral.SetPRStateLookupForTest(func(context.Context, string, ephemeral.Marker) (string, error) {
 		return "", nil
 	}))

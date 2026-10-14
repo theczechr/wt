@@ -60,6 +60,7 @@ func TestSweepIgnoresUnmarkedDirectories(t *testing.T) {
 }
 
 func TestSweepOnAMissingEphemeralDirIsNotAnError(t *testing.T) {
+	t.Setenv("WT_STATE_DIR", t.TempDir())
 	r := gittest.New(t)
 	cfg := config.Config{Repos: map[string]config.Repo{"demo": {Name: "demo"}}}
 	decisions, err := ephemeral.Sweep(context.Background(), cfg, map[string]string{"demo": r.Primary}, ephemeral.SweepOptions{})

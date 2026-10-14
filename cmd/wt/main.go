@@ -192,8 +192,8 @@ func main() {
 		if _, err := ephemeral.ReadMarker(root); err != nil {
 			return // not one of ours; say nothing
 		}
-		err = ephemeral.Reap(ctx, cfg, root, endingSession)
-		ephemeral.LogReap(root, err)
+		d, err := ephemeral.ReapWith(ctx, cfg, root, ephemeral.InspectOptions{ExcludeSessionID: endingSession})
+		ephemeral.LogReap(root, err, d.Reason)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "wt: reap:", err)
 			os.Exit(1)

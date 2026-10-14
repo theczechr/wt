@@ -4,10 +4,17 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/theczechr/ephemera/internal/config"
 )
+
+// SweepOptions tunes a sweep.
+type SweepOptions struct {
+	DryRun bool
+	Grace  time.Duration
+}
 
 // Sweep removes every ephemeral worktree that passes the reap predicate,
 // returning one Decision per worktree it inspected (or, with DryRun, would
@@ -18,15 +25,27 @@ import (
 // worktree missed then would otherwise live forever. Both paths go through
 // ReapWith, so both are bound by the same checks.
 //
-// SweepOptions tunes a sweep.
-type SweepOptions struct {
-	DryRun bool
-	Grace  time.Duration
-}
-
+// Only one sweep runs at a time; a second returns ErrSweepBusy immediately
+// (spec §3.4). Repos are walked in name order so dry-run output is stable.
 func Sweep(ctx context.Context, cfg config.Config, primaries map[string]string, opts SweepOptions) ([]Decision, error) {
+	release, ok, err := acquireLock(sweepLockName)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrSweepBusy
+	}
+	defer release()
+
+	names := make([]string, 0, len(primaries))
+	for n := range primaries {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
 	var out []Decision
-	for name, primary := range primaries {
+	for _, name := range names {
+		primary := primaries[name]
 		r, ok := cfg.Repos[name]
 		if !ok || !r.EphemeralEnabled() {
 			continue
@@ -53,7 +72,7 @@ func Sweep(ctx context.Context, cfg config.Config, primaries map[string]string, 
 				continue
 			}
 			d, err := ReapWith(ctx, cfg, path, io)
-			LogReap(path, err)
+			LogReap(path, err, d.Reason)
 			out = append(out, d)
 		}
 	}

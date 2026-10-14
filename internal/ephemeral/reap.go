@@ -352,18 +352,8 @@ func probeLiveness(ctx context.Context, worktree, excludeSessionID string) (sess
 	return sessions, procs, sessionsKnown, blockers
 }
 
-// Reap removes worktree if and only if Blockers is empty.
-//
-// Removal goes through trash.SoftDelete rather than a direct `git worktree
-// remove`: a reap is unattended, so it must leave a manifest entry the user
-// can restore from. SoftDelete's own model.PruneBlockers check is a second
-// layer under the inspection above, never a substitute for it -- it has no
-// upstream or ahead check, and the DirtyCount it reads is 0 both for a clean
-// tree and for one whose `git status` failed.
-//
-// delete_mode is deliberately not consulted. It governs the dashboard's
-// manual delete, where the user is present to catch a mistake; nothing
-// watches a reap, so it always soft-deletes.
+// Reap is ReapWith with no grace and only ExcludeSessionID set. Removal
+// behaviour lives in ReapWith; see it for the details.
 //
 // excludeSessionID exempts exactly one Claude session from the live-session
 // clause, and exists because a SessionEnd hook runs while the session that
@@ -387,6 +377,17 @@ var beforeRemoval = func(string) {}
 // ReapWith removes worktree if and only if inspection finds no blockers. The
 // inspection runs here, immediately before removal, never earlier (spec
 // §3.4): a session opened mid-sweep still blocks.
+//
+// Removal goes through trash.SoftDelete rather than a direct `git worktree
+// remove`: a reap is unattended, so it must leave a manifest entry the user
+// can restore from. SoftDelete's own model.PruneBlockers check is a second
+// layer under the inspection above, never a substitute for it -- it has no
+// upstream or ahead check, and the DirtyCount it reads is 0 both for a clean
+// tree and for one whose `git status` failed.
+//
+// delete_mode is deliberately not consulted. It governs the dashboard's
+// manual delete, where the user is present to catch a mistake; nothing
+// watches a reap, so it always soft-deletes.
 func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts InspectOptions) (Decision, error) {
 	st := inspect(ctx, cfg, worktree, opts)
 	d := st.decision(worktree)
