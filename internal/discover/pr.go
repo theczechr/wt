@@ -21,6 +21,11 @@ type prJSON struct {
 
 // ParsePRList converts `gh pr list --json` output into a branch-keyed map.
 // Unparseable input yields an empty map, never an error: gh may be missing.
+//
+// A branch name can carry several PRs over time. An OPEN one wins; otherwise
+// the newest (highest number). Keeping whichever came last would pick the
+// OLDEST, since gh lists newest first -- and an old CLOSED PR on a reused
+// branch name would then mark fresh work as finished.
 func ParsePRList(body []byte) map[string]model.PR {
 	out := map[string]model.PR{}
 	var items []prJSON
@@ -28,9 +33,21 @@ func ParsePRList(body []byte) map[string]model.PR {
 		return out
 	}
 	for _, it := range items {
+		cur, seen := out[it.HeadRefName]
+		if seen && !prefer(it, cur) {
+			continue
+		}
 		out[it.HeadRefName] = model.PR{Number: it.Number, State: it.State}
 	}
 	return out
+}
+
+// prefer reports whether it should replace cur for the same branch.
+func prefer(it prJSON, cur model.PR) bool {
+	if (it.State == "OPEN") != (cur.State == "OPEN") {
+		return it.State == "OPEN"
+	}
+	return it.Number > cur.Number
 }
 
 // PRsForRepo makes ONE gh call covering every branch in the repo. Never call
