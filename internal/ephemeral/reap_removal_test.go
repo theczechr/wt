@@ -100,14 +100,30 @@ func TestReapRefusesWhenAProcessStartsBeforeRemoval(t *testing.T) {
 	r := gittest.New(t)
 	cfg, wt := newEphemeral(t, r, "feat/busy-late")
 
-	src := filepath.Join(t.TempDir(), "sleeper.go")
+	// Built once and exec'd directly so Kill reaches the sleeper itself. The
+	// "node" in the path makes discover's interesting() keyword filter treat
+	// it as work worth resolving a cwd for.
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.go")
 	program := "package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(time.Minute) }\n"
 	if err := os.WriteFile(src, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	bin := filepath.Join(dir, "node-sleeper")
+	build := exec.Command("go", "build", "-o", bin, src)
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
 	var cmd *exec.Cmd
+	t.Cleanup(func() {
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
 	restore := ephemeral.SetBeforeRemovalForTest(func(string) {
-		cmd = exec.Command("go", "run", src)
+		cmd = exec.Command(bin)
 		cmd.Dir = wt
 		if err := cmd.Start(); err != nil {
 			t.Errorf("could not start the child: %v", err)
@@ -118,12 +134,6 @@ func TestReapRefusesWhenAProcessStartsBeforeRemoval(t *testing.T) {
 		}, "running process")
 	})
 	defer restore()
-	t.Cleanup(func() {
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-		}
-	})
 
 	d, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()})
 	if err == nil || !strings.Contains(err.Error(), "became busy") {
@@ -134,5 +144,50 @@ func TestReapRefusesWhenAProcessStartsBeforeRemoval(t *testing.T) {
 	}
 	if _, statErr := os.Stat(wt); statErr != nil {
 		t.Error("the worktree must still exist:", statErr)
+	}
+}
+
+// With --force git no longer refuses a dirty tree, so cleanliness must be
+// re-read after inspect: a file written in the window must survive.
+func TestReapRefusesWhenSubmoduleGetsDirtyBeforeRemoval(t *testing.T) {
+	r := gittest.New(t)
+	r.AddSubmodule(t)
+	cfg, wt := newEphemeral(t, r, "feat/dirty-late")
+	r.Git(t, wt, "submodule", "update", "--init", "-q")
+	scratch := filepath.Join(wt, "sub", "late.txt")
+	restore := ephemeral.SetBeforeRemovalForTest(func(string) {
+		if err := os.WriteFile(scratch, []byte("x"), 0o600); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	})
+	defer restore()
+
+	d, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()})
+	if err == nil || !strings.Contains(err.Error(), "changed before removal") {
+		t.Fatalf("err = %v, want a 'changed before removal' refusal", err)
+	}
+	if d.Reap {
+		t.Errorf("decision must not say reap: %+v", d)
+	}
+	if _, statErr := os.Stat(scratch); statErr != nil {
+		t.Error("the file must survive:", statErr)
+	}
+}
+
+// A commit landing in the window must keep a wt-created branch.
+func TestReapKeepsBranchWhenCommitLandsBeforeRemoval(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/commit-late")
+	markWTBranch(t, wt)
+	restore := ephemeral.SetBeforeRemovalForTest(func(string) {
+		r.Git(t, wt, "-c", "user.email=other@test.invalid", "commit", "-q", "--allow-empty", "-m", "late")
+	})
+	defer restore()
+
+	if _, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.TryGit(r.Primary, "show-ref", "--verify", "--quiet", "refs/heads/feat/commit-late"); err != nil {
+		t.Error("a branch that gained an unpushed commit must be kept")
 	}
 }

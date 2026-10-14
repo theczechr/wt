@@ -250,8 +250,8 @@ func inspect(ctx context.Context, cfg config.Config, worktree string, opts Inspe
 // the removal, and a session started in that window must still block.
 func probeLiveness(ctx context.Context, worktree, excludeSessionID string) (sessions []model.Session, procs []model.Proc, sessionsKnown bool, blockers []string) {
 	// One snapshot, feeding both checks and the Workspace. Snapshot forks ps
-	// and lsof, so calling it twice would double the cost of every reap for
-	// no new information. SnapshotErr (not Snapshot) is used deliberately: a
+	// and lsof, so it is taken once per probe; the probe itself is
+	// deliberately repeated by ReapWith just before removal. SnapshotErr (not Snapshot) is used deliberately: a
 	// failed ps must read as "couldn't check", never as "nothing running" --
 	// the same FillStatus-shaped trap this task exists to close, reproduced
 	// here for processes instead of git status.
@@ -398,12 +398,43 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 		d.Reap, d.Reason = false, "became busy before removal: "+strings.Join(busy, "; ")
 		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
 	}
-	ro := trash.RemoveOptions{Force: st.hasSubmodules, DeleteBranch: st.deleteBranch, PR: st.marker.PR}
+	// Cleanliness is re-read too (spec §3.4): inspect ran before the slow PR
+	// lookup, and with --force git's own dirty refusal is gone, so a file
+	// written in that window would be destroyed. Fail closed on any error.
+	if changed := recheckClean(ctx, worktree); len(changed) > 0 {
+		d.Reap, d.Reason = false, "changed before removal: "+strings.Join(changed, "; ")
+		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
+	}
+	deleteBranch := st.deleteBranch
+	if deleteBranch {
+		// A commit made in the window must keep the branch.
+		if n, err := unpushedCount(ctx, st.marker.Primary, st.marker.Branch); err != nil || n != 0 {
+			deleteBranch = false
+		}
+	}
+	ro := trash.RemoveOptions{Force: st.hasSubmodules, DeleteBranch: deleteBranch, PR: st.marker.PR}
 	if _, err := trash.SoftDeleteWith(ctx, st.ws, st.marker.Primary, ro); err != nil {
 		d.Reap, d.Reason = false, err.Error()
 		return d, fmt.Errorf("soft-deleting %s: %w", worktree, err)
 	}
 	return d, nil
+}
+
+// recheckClean re-reads the worktree's status and its submodules' status,
+// returning a reason for each that is dirty or unreadable.
+func recheckClean(ctx context.Context, worktree string) []string {
+	var out []string
+	if n, err := dirtyCount(ctx, worktree); err != nil {
+		out = append(out, fmt.Sprintf("could not read git status: %v", err))
+	} else if n > 0 {
+		out = append(out, "has uncommitted changes")
+	}
+	if dirty, err := submodulesDirty(ctx, worktree); err != nil {
+		out = append(out, fmt.Sprintf("could not read submodule status: %v", err))
+	} else if dirty {
+		out = append(out, "a submodule has uncommitted or untracked changes")
+	}
+	return out
 }
 
 // dirtyCount counts changed paths in the worktree. The error return is not
