@@ -155,6 +155,8 @@ func main() {
 		fmt.Println(target)
 	case "reap":
 		os.Exit(runReap(cfg, os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	case "hooks":
+		os.Exit(runHooks(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "":
 		// Trash expiry runs before the TUI paints anything: it only ever
 		// drops manifest records for worktrees `git worktree remove`
