@@ -310,6 +310,7 @@ func writeChoice(path, sessionID string) {
 // owning the pty there was no way to reach a session running in another
 // terminal, and focusing herdr's workspace is exactly that.
 func handOff(path, sessionID string) {
+	touchIfEphemeral(path)
 	if !herdr.InPluginPane() {
 		writeChoice(path, sessionID)
 		return
@@ -437,24 +438,53 @@ func openOrCreateBranch(cfg config.Config, repoName, branch string) (string, err
 	if err := bootstrap.CreateAt(ctx, primary, target, branch, base, r.ForEphemeral()); err != nil {
 		return "", fmt.Errorf("bootstrapping %s: %w (left in place for you to inspect or remove)", target, err)
 	}
+	start, err := headOf(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("created %s but %w", target, err)
+	}
 	if err := ephemeral.WriteMarker(target, ephemeral.Marker{
 		Repo: repoName, Branch: branch, Primary: primary, CreatedAt: time.Now(),
+		Start: start,
+		// The user asked for a brand-new branch; it holds their work.
+		BranchCreatedByWT: false,
 	}); err != nil {
 		return "", fmt.Errorf("created %s but could not mark it ephemeral: %w", target, err)
 	}
 	return target, nil
 }
 
+// headOf returns the commit dir's HEAD points at.
+func headOf(ctx context.Context, dir string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("reading HEAD of %s: %w", dir, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// touchIfEphemeral records that the user is being handed path, when path
+// is a wt ephemeral. Best effort: a failure only means the idle clock
+// starts from an older signal.
+func touchIfEphemeral(path string) {
+	if _, err := ephemeral.ReadMarker(path); err == nil {
+		_ = ephemeral.TouchOpened(path, time.Now())
+	}
+}
+
 // openBranch resolves branch to a worktree, creating an ephemeral one when
 // nothing has it checked out, and returns the path to cd into.
 func openBranch(cfg config.Config, branch string) (string, error) {
+	return openBranchIn(cfg, resolve.Primaries(cfg), branch)
+}
+
+// openBranchIn is openBranch with the primaries already resolved.
+func openBranchIn(cfg config.Config, primaries map[string]string, branch string) (string, error) {
 	if err := resolve.ValidBranchName(branch); err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mutateTimeout)
 	defer cancel()
 
-	primaries := resolve.Primaries(cfg)
 	if len(primaries) == 0 {
 		return "", fmt.Errorf("no configured repo found under any scan root %v", cfg.ScanRoots)
 	}
@@ -523,11 +553,19 @@ func openBranch(cfg config.Config, branch string) (string, error) {
 	}
 	// Only after a successful bootstrap: a half-set-up worktree is left for
 	// the user to inspect rather than being silently collected later.
+	start, err := headOf(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("created %s but %w", target, err)
+	}
 	if err := ephemeral.WriteMarker(target, ephemeral.Marker{
 		Repo:      m.Repo,
 		Branch:    branch,
 		Primary:   m.Primary,
 		CreatedAt: time.Now(),
+		Start:     start,
+		// A remote-only branch gets its local copy from wt here; a local
+		// branch is the user's own.
+		BranchCreatedByWT: !m.Local,
 	}); err != nil {
 		return "", fmt.Errorf("created %s but could not mark it ephemeral: %w", target, err)
 	}
