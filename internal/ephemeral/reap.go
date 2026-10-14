@@ -329,6 +329,13 @@ func inspect(ctx context.Context, cfg config.Config, worktree string, opts Inspe
 	st.verdict = Decide(f)
 	if !st.verdict.Done {
 		st.blockers = append(st.blockers, "not done yet: "+st.verdict.Reason)
+		return st
+	}
+	if m.BranchCreatedByWT {
+		// Unreadable means "keep the branch": the safe outcome, not a blocker.
+		if n, err := unpushedCount(ctx, m.Primary, m.Branch); err == nil && n == 0 {
+			st.deleteBranch = true
+		}
 	}
 	return st
 }
@@ -370,7 +377,8 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 	if !d.Reap {
 		return d, fmt.Errorf("refusing to remove %s: %s", worktree, strings.Join(st.blockers, "; "))
 	}
-	if _, err := trash.SoftDelete(ctx, st.ws, st.marker.Primary); err != nil {
+	ro := trash.RemoveOptions{Force: st.hasSubmodules, DeleteBranch: st.deleteBranch, PR: st.marker.PR}
+	if _, err := trash.SoftDeleteWith(ctx, st.ws, st.marker.Primary, ro); err != nil {
 		d.Reap, d.Reason = false, err.Error()
 		return d, fmt.Errorf("soft-deleting %s: %w", worktree, err)
 	}
