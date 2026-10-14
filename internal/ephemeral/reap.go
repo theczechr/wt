@@ -396,6 +396,14 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 		return d, fmt.Errorf("refusing to remove %s: %s", worktree, strings.Join(st.blockers, "; "))
 	}
 	beforeRemoval(worktree)
+	// The marker is re-read too. `wt <branch>` spawns its background sweep
+	// before it touches the marker at hand-off, so this sweep may have
+	// judged an old last_opened_at; and deleting the marker promotes the
+	// worktree to permanent, which must win even mid-reap.
+	if reason := reopenedReason(worktree, opts.Grace); reason != "" {
+		d.Reap, d.Reason = false, reason
+		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
+	}
 	if _, _, _, busy := probeLiveness(ctx, worktree, opts.ExcludeSessionID); len(busy) > 0 {
 		d.Reap, d.Reason = false, "became busy before removal: "+strings.Join(busy, "; ")
 		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
@@ -420,6 +428,21 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 		return d, fmt.Errorf("soft-deleting %s: %w", worktree, err)
 	}
 	return d, nil
+}
+
+// reopenedReason re-reads the marker and re-applies the grace against the
+// current time. It returns why removal must stop, or "" to proceed.
+func reopenedReason(worktree string, grace time.Duration) string {
+	m, err := ReadMarker(worktree)
+	if err != nil {
+		return fmt.Sprintf("no usable %s marker before removal: %v", MarkerName, err)
+	}
+	if grace > 0 {
+		if age := time.Since(openedAt(m)); age < grace {
+			return fmt.Sprintf("opened again before removal (%s ago, sweep grace %s)", age.Round(time.Second), grace)
+		}
+	}
+	return ""
 }
 
 // recheckClean re-reads the worktree's status, its submodules' status and

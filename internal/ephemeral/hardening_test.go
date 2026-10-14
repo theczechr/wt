@@ -147,3 +147,54 @@ func TestReapRecheckRefusesLateSubmoduleCommit(t *testing.T) {
 		t.Errorf("the submodule commit must still exist: %v", err)
 	}
 }
+
+// `wt feat/x` spawns its background sweep before it touches the marker, so
+// the sweep can inspect the old last_opened_at. The grace must be re-applied
+// against a fresh read of the marker immediately before removal.
+func TestReapRefusesWhenReopenedBeforeRemoval(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/reopened")
+	old := time.Now().Add(-time.Hour)
+	if err := ephemeral.UpdateMarker(wt, func(m *ephemeral.Marker) { m.CreatedAt = old }); err != nil {
+		t.Fatal(err)
+	}
+	opts := ephemeral.InspectOptions{Grace: ephemeral.DefaultSweepGrace}
+	if d := ephemeral.Inspect(context.Background(), cfg, wt, opts); !d.Reap {
+		t.Fatalf("precondition: an hour-old clean worktree must be reapable, got %+v", d)
+	}
+	restore := ephemeral.SetBeforeRemovalForTest(func(string) {
+		if err := ephemeral.TouchOpened(wt, time.Now()); err != nil {
+			t.Errorf("TouchOpened: %v", err)
+		}
+	})
+	defer restore()
+	d, err := ephemeral.ReapWith(context.Background(), cfg, wt, opts)
+	if err == nil || !strings.Contains(err.Error(), "opened again before removal") {
+		t.Fatalf("err = %v, want an 'opened again before removal' refusal", err)
+	}
+	if d.Reap {
+		t.Errorf("decision must not say reap: %+v", d)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Error("the worktree must survive:", err)
+	}
+}
+
+// Deleting the marker promotes a worktree to permanent; doing so while a
+// reap is in flight must still win.
+func TestReapRefusesWhenMarkerRemovedBeforeRemoval(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/promoted")
+	restore := ephemeral.SetBeforeRemovalForTest(func(string) {
+		if err := os.Remove(filepath.Join(wt, ephemeral.MarkerName)); err != nil {
+			t.Errorf("remove marker: %v", err)
+		}
+	})
+	defer restore()
+	if _, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()}); err == nil {
+		t.Fatal("ReapWith must refuse once the marker is gone")
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Error("the worktree must survive:", err)
+	}
+}
