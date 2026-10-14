@@ -30,3 +30,11 @@ func HoldSweepLockForTest(t *testing.T) func() {
 	}
 	return release
 }
+
+// SetAncestorPIDsForTest swaps the ancestor-process lookup the SessionEnd
+// exemption uses and returns a function restoring the original.
+func SetAncestorPIDsForTest(f func(ctx context.Context) (map[int]bool, error)) (restore func()) {
+	old := ancestorPIDs
+	ancestorPIDs = f
+	return func() { ancestorPIDs = old }
+}

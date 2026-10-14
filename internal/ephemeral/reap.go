@@ -330,6 +330,33 @@ func probeLiveness(ctx context.Context, worktree, excludeSessionID string) (sess
 			ID: sp.SessionID, Cwd: sp.Cwd, Live: true, PID: sp.PID,
 		})
 	}
+	// A Claude process with no session id on its command line -- a plain
+	// interactive `claude`, or a new T3 Code session -- has nothing to match
+	// against a transcript or exempt by name, so any one at or under this
+	// worktree counts as a live session. The single exception is the
+	// SessionEnd hook's own session: Claude runs the hook as its descendant
+	// and waits for it, so an id-less claude process that is an ancestor of
+	// this very process is the session that is ending. That exemption needs
+	// the hook's ending-session id to be set (sweeps and `wt reap <path>`
+	// never exempt anything), and a failed ancestor walk exempts nothing.
+	var ancestors map[int]bool
+	ancestorsRead := false
+	for _, p := range snap.ClaudeProcs {
+		pc := resolve(p.Cwd)
+		if pc != rw && !strings.HasPrefix(pc, rw+string(filepath.Separator)) {
+			continue
+		}
+		if excludeSessionID != "" {
+			if !ancestorsRead {
+				ancestors, _ = ancestorPIDs(ctx)
+				ancestorsRead = true
+			}
+			if ancestors[p.PID] {
+				continue
+			}
+		}
+		sessions = append(sessions, model.Session{Cwd: p.Cwd, Live: true, PID: p.PID})
+	}
 	// The Workspace handed to trash.SoftDelete re-runs PruneBlockers, whose
 	// !SessionsKnown check is only meaningful if this probe's outcome
 	// travels with it. Known exactly when every queried path answered.
@@ -370,6 +397,9 @@ func Reap(ctx context.Context, cfg config.Config, worktree, excludeSessionID str
 	_, err := ReapWith(ctx, cfg, worktree, InspectOptions{ExcludeSessionID: excludeSessionID})
 	return err
 }
+
+// ancestorPIDs is swapped out in tests (export_test.go).
+var ancestorPIDs = discover.AncestorPIDs
 
 // beforeRemoval is a test seam: called right before the final liveness
 // re-probe, so a test can start a process inside the removal window.

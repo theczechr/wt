@@ -2,7 +2,9 @@ package ephemeral_test
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -196,5 +198,74 @@ func TestReapRefusesWhenMarkerRemovedBeforeRemoval(t *testing.T) {
 	}
 	if _, err := os.Stat(wt); err != nil {
 		t.Error("the worktree must survive:", err)
+	}
+}
+
+// startIdlessClaude runs a sleeper binary named `claude`, with no session id
+// on its command line, in dir, and returns its pid.
+func startIdlessClaude(t *testing.T, dir string) int {
+	t.Helper()
+	build := t.TempDir()
+	src := filepath.Join(build, "main.go")
+	program := "package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(time.Minute) }\n"
+	if err := os.WriteFile(src, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(build, "claude")
+	cmd := exec.Command("go", "build", "-o", bin, src)
+	cmd.Dir = build
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	c := exec.Command(bin)
+	c.Dir = dir
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
+	return c.Process.Pid
+}
+
+func TestBlockersRefusesIdlessClaudeProcess(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/idless-claude")
+	startIdlessClaude(t, wt)
+	waitForBlocker(t, func() []string {
+		return ephemeral.Blockers(context.Background(), cfg, wt)
+	}, "has a live Claude session")
+	// An id-less process can never match the ending session's id.
+	b := ephemeral.BlockersExcluding(context.Background(), cfg, wt, "11111111-1111-1111-1111-111111111111")
+	if !blockersContain(b, "has a live Claude session") {
+		t.Errorf("an id-less claude process must not be exempt by session id, got %v", b)
+	}
+}
+
+// The SessionEnd hook runs as a descendant of the session that is ending,
+// which for a plain `claude` has no id on its command line. That ancestor,
+// and only it, is exempt -- and only in hook mode.
+func TestBlockersExemptsIdlessClaudeOnlyAsTheHooksAncestor(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/idless-ancestor")
+	pid := startIdlessClaude(t, wt)
+	waitForBlocker(t, func() []string {
+		return ephemeral.Blockers(context.Background(), cfg, wt)
+	}, "has a live Claude session")
+
+	t.Cleanup(ephemeral.SetAncestorPIDsForTest(func(context.Context) (map[int]bool, error) {
+		return map[int]bool{pid: true}, nil
+	}))
+	const ending = "11111111-1111-1111-1111-111111111111"
+	if b := ephemeral.BlockersExcluding(context.Background(), cfg, wt, ending); blockersContain(b, "live Claude session") {
+		t.Errorf("the hook's own ancestor session must be exempt, got %v", b)
+	}
+	if b := ephemeral.Blockers(context.Background(), cfg, wt); !blockersContain(b, "live Claude session") {
+		t.Errorf("without an ending session nothing is exempt, got %v", b)
+	}
+
+	ephemeral.SetAncestorPIDsForTest(func(context.Context) (map[int]bool, error) {
+		return nil, errors.New("ps failed")
+	})
+	if b := ephemeral.BlockersExcluding(context.Background(), cfg, wt, ending); !blockersContain(b, "live Claude session") {
+		t.Errorf("a failed ancestor walk must exempt nothing, got %v", b)
 	}
 }
