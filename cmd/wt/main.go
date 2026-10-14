@@ -152,53 +152,7 @@ func main() {
 		}
 		fmt.Println(target)
 	case "reap":
-		// reap does mutate -- Reap can reach `git worktree remove` and a
-		// trash-manifest write -- but collectTimeout is still the right
-		// budget, not mutateTimeout: mutateTimeout's 15 minutes is sized for
-		// a cold submodule clone plus post_create installs, which is absurd
-		// here. A reap is one `git worktree remove` and a small manifest
-		// write, both fast, and it runs from a SessionEnd hook, so it must
-		// not hang a session's exit.
-		ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
-		defer cancel()
-		target := ""
-		// endingSession is the one session Reap must not count as live. A
-		// SessionEnd hook runs while its own session is still alive -- Claude
-		// forks this process and waits for it -- so `ps` reports that session
-		// and, without naming it here, every hook-driven reap would refuse
-		// itself. Empty for `wt reap <path>`, where no session is ending.
-		endingSession := ""
-		if len(os.Args) > 2 {
-			target = os.Args[2]
-		} else {
-			// No argument means hook mode: the SessionEnd payload arrives on
-			// stdin.
-			ev, err := ephemeral.ParseSessionEnd(os.Stdin)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "wt: reap:", err)
-				os.Exit(1)
-			}
-			if !ephemeral.ShouldReap(ev.Reason) {
-				return
-			}
-			target, endingSession = ev.Cwd, ev.SessionID
-		}
-		root, err := ephemeral.WorktreeRoot(ctx, target)
-		if err != nil {
-			// Not an error worth an exit code: the hook fires for every
-			// session, most of which are nowhere near an ephemeral worktree.
-			return
-		}
-		if _, err := ephemeral.ReadMarker(root); err != nil {
-			return // not one of ours; say nothing
-		}
-		d, err := ephemeral.ReapWith(ctx, cfg, root, ephemeral.InspectOptions{ExcludeSessionID: endingSession})
-		ephemeral.LogReap(root, err, d.Reason)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "wt: reap:", err)
-			os.Exit(1)
-		}
-		fmt.Println("reaped", root)
+		os.Exit(runReap(cfg, os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "":
 		// Trash expiry runs before the TUI paints anything: it only ever
 		// drops manifest records for worktrees `git worktree remove`
@@ -232,14 +186,17 @@ func main() {
 				time.Since(snapshotLoadStart), needsRefresh)
 		}
 		refresh := func() ([]model.Workspace, int) {
-			ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
-			defer cancel()
 			// Deliberately inside refresh, not on the launch path: PERF.md's
 			// whole point is that the first frame paints from a snapshot
 			// without waiting on git. Sweeping here costs the user nothing
-			// they can see.
-			_, _ = ephemeral.Sweep(ctx, cfg, resolve.Primaries(cfg),
+			// they can see. The sweep gets its own budget so a slow sweep
+			// (gh calls) cannot starve Collect.
+			sweepCtx, sweepCancel := context.WithTimeout(context.Background(), sweepTimeout)
+			_, _ = ephemeral.Sweep(sweepCtx, cfg, resolve.Primaries(cfg),
 				ephemeral.SweepOptions{Grace: ephemeral.DefaultSweepGrace})
+			sweepCancel()
+			ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
+			defer cancel()
 			return aggregate.Collect(ctx, cfg)
 		}
 		ops := ui.TrashOps{
