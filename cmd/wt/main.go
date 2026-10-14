@@ -56,6 +56,8 @@ func main() {
 		cmd = os.Args[1]
 	}
 
+	maybeSpawnSweep(cfg, cmd)
+
 	switch cmd {
 	case "status":
 		// defer would run at the end of main, not the end of this case --
