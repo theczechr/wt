@@ -171,6 +171,7 @@ func inspect(ctx context.Context, cfg config.Config, worktree string, opts Inspe
 	case dirty:
 		b = append(b, "a submodule has uncommitted or untracked changes")
 	}
+	b = append(b, submoduleCommitBlockers(ctx, worktree)...)
 	hasSubs, err := hasSubmodules(ctx, worktree)
 	if err != nil {
 		b = append(b, fmt.Sprintf("could not read submodule state: %v", err))
@@ -421,8 +422,9 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 	return d, nil
 }
 
-// recheckClean re-reads the worktree's status and its submodules' status,
-// returning a reason for each that is dirty or unreadable.
+// recheckClean re-reads the worktree's status, its submodules' status and
+// their unpushed commits, returning a reason for each that is dirty or
+// unreadable.
 func recheckClean(ctx context.Context, worktree string) []string {
 	var out []string
 	if n, err := dirtyCount(ctx, worktree); err != nil {
@@ -435,7 +437,19 @@ func recheckClean(ctx context.Context, worktree string) []string {
 	} else if dirty {
 		out = append(out, "a submodule has uncommitted or untracked changes")
 	}
-	return out
+	return append(out, submoduleCommitBlockers(ctx, worktree)...)
+}
+
+// submoduleCommitBlockers refuses a worktree whose submodules hold commits
+// found on no remote, or whose submodules cannot be checked for them.
+func submoduleCommitBlockers(ctx context.Context, worktree string) []string {
+	switch unpushed, err := submodulesUnpushed(ctx, worktree); {
+	case err != nil:
+		return []string{fmt.Sprintf("could not check submodules for unpushed commits: %v", err)}
+	case unpushed:
+		return []string{"a submodule has commits that exist on no remote"}
+	}
+	return nil
 }
 
 // dirtyCount counts changed paths in the worktree. The error return is not

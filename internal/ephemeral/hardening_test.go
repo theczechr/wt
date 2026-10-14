@@ -80,3 +80,70 @@ func TestReapRecheckSeesLateUntrackedFileUnderShowUntrackedNo(t *testing.T) {
 		t.Error("the file must survive:", err)
 	}
 }
+
+// commitInSubmodule makes a commit inside wt/sub that exists on no remote and
+// bumps the superproject's pointer to it with someone else's commit -- so the
+// worktree is "done" (no own commits) and the only copy of the submodule
+// commit lives in the worktree's own modules dir. It returns that commit.
+func commitInSubmodule(t *testing.T, r *gittest.Repo, wt string, detached bool) string {
+	t.Helper()
+	sub := filepath.Join(wt, "sub")
+	if detached {
+		r.Git(t, sub, "checkout", "-q", "--detach")
+	} else {
+		r.Git(t, sub, "checkout", "-q", "-b", "subwork")
+	}
+	r.WriteCommit(t, sub, "subwork.txt", "only copy\n")
+	sha := strings.TrimSpace(r.Git(t, sub, "rev-parse", "HEAD"))
+	r.Git(t, wt, "add", "sub")
+	r.Git(t, wt, "-c", "user.email=other@test.invalid", "commit", "-qm", "bump sub")
+	return sha
+}
+
+func TestReapRefusesUnpushedSubmoduleCommit(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		name := map[bool]string{false: "on-a-branch", true: "detached"}[detached]
+		t.Run(name, func(t *testing.T) {
+			r := gittest.New(t)
+			r.AddSubmodule(t)
+			cfg, wt := newEphemeral(t, r, "feat/sub-commit-"+name)
+			r.Git(t, wt, "submodule", "update", "--init", "-q")
+			sha := commitInSubmodule(t, r, wt, detached)
+
+			b := ephemeral.Blockers(context.Background(), cfg, wt)
+			if !blockersContain(b, "exist on no remote") {
+				t.Fatalf("an unpushed submodule commit must block, got %v", b)
+			}
+			if _, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()}); err == nil {
+				t.Fatal("ReapWith must refuse")
+			}
+			if _, err := r.TryGit(filepath.Join(wt, "sub"), "cat-file", "-e", sha+"^{commit}"); err != nil {
+				t.Errorf("the submodule commit must still exist: %v", err)
+			}
+		})
+	}
+}
+
+// A submodule commit made after inspect must stop the --force removal too.
+func TestReapRecheckRefusesLateSubmoduleCommit(t *testing.T) {
+	r := gittest.New(t)
+	r.AddSubmodule(t)
+	cfg, wt := newEphemeral(t, r, "feat/sub-commit-late")
+	r.Git(t, wt, "submodule", "update", "--init", "-q")
+	var sha string
+	restore := ephemeral.SetBeforeRemovalForTest(func(string) {
+		sub := filepath.Join(wt, "sub")
+		r.Git(t, sub, "checkout", "-q", "-b", "subwork")
+		r.Git(t, sub, "commit", "-q", "--allow-empty", "-m", "late")
+		sha = strings.TrimSpace(r.Git(t, sub, "rev-parse", "HEAD"))
+		r.Git(t, sub, "checkout", "-q", "--detach", "HEAD~1")
+	})
+	defer restore()
+	_, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()})
+	if err == nil || !strings.Contains(err.Error(), "exist on no remote") {
+		t.Fatalf("err = %v, want an 'exist on no remote' refusal", err)
+	}
+	if _, err := r.TryGit(filepath.Join(wt, "sub"), "cat-file", "-e", sha+"^{commit}"); err != nil {
+		t.Errorf("the submodule commit must still exist: %v", err)
+	}
+}
