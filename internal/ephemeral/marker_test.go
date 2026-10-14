@@ -93,7 +93,66 @@ func TestWriteMarkerStampsVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != 1 {
-		t.Errorf("Version = %d, want 1", got.Version)
+	if got.Version != 2 {
+		t.Errorf("Version = %d, want 2", got.Version)
+	}
+}
+
+func TestReadMarkerAcceptsVersionOne(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"version":1,"repo":"server","branch":"feat/x","primary":"/p","created_at":"2026-08-13T10:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, ephemeral.MarkerName), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := ephemeral.ReadMarker(dir)
+	if err != nil {
+		t.Fatalf("a v1 marker must stay readable: %v", err)
+	}
+	if m.Start != "" {
+		t.Errorf("Start = %q, want empty for v1 (selects the fallback own-commit rule)", m.Start)
+	}
+}
+
+func TestMarkerV2RoundTripsNewFields(t *testing.T) {
+	dir := t.TempDir()
+	opened := time.Now().UTC().Truncate(time.Second)
+	in := ephemeral.Marker{
+		Repo: "server", Branch: "pr/7", Primary: "/p", CreatedAt: opened,
+		Start: "abc123", PR: 7, BranchCreatedByWT: true, LastOpenedAt: opened,
+	}
+	if err := ephemeral.WriteMarker(dir, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ephemeral.ReadMarker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Start != "abc123" || got.PR != 7 || !got.BranchCreatedByWT || !got.LastOpenedAt.Equal(opened) {
+		t.Errorf("round trip lost fields: %+v", got)
+	}
+}
+
+func TestTouchOpenedUpgradesV1KeepingStartEmpty(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"version":1,"repo":"server","branch":"feat/x","primary":"/p","created_at":"2026-08-13T10:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, ephemeral.MarkerName), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := ephemeral.TouchOpened(dir, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ephemeral.ReadMarker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 2 || !got.LastOpenedAt.Equal(now) || got.Start != "" {
+		t.Errorf("got %+v, want v2 with LastOpenedAt set and Start still empty", got)
+	}
+}
+
+func TestTouchOpenedOnUnmarkedDirIsAnError(t *testing.T) {
+	if err := ephemeral.TouchOpened(t.TempDir(), time.Now()); err == nil {
+		t.Error("touching a directory without a marker must fail, never create one")
 	}
 }
