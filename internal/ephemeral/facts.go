@@ -164,7 +164,7 @@ func isLocked(ctx context.Context, primary, worktree string) (bool, error) {
 			return locked, nil
 		}
 	}
-	return false, nil
+	return false, fmt.Errorf("%s is not in git worktree list", worktree)
 }
 
 // hasSubmodules reports whether any submodule is initialized in worktree.
