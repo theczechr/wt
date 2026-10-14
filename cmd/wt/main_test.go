@@ -55,7 +55,7 @@ func TestNonNilWorkspacesPassesThroughNonNil(t *testing.T) {
 // contains one as a substring) must not be swallowed as a subcommand -- that
 // is exactly what `wt open <branch>` exists to escape.
 func TestIsReservedCommand(t *testing.T) {
-	for _, r := range []string{"status", "new", "bootstrap", "reap", "open", "help", "-h", "--help"} {
+	for _, r := range []string{"status", "new", "bootstrap", "reap", "open", "hook", "hooks", "timer", "branches", "help", "-h", "--help"} {
 		if !isReservedCommand(r) {
 			t.Errorf("%q must be reserved", r)
 		}

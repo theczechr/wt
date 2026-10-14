@@ -56,6 +56,14 @@ automatically.
    | `ephemeral_post_create` | falls back to `post_create` | lighter setup for review worktrees; set to `[]` to run nothing |
    | `default_remote` | `origin` | remote used to resolve a branch that exists only upstream |
    | `ephemeral` | `true` | set `false` to stop wt creating ephemerals for this repo |
+   | `idle_days` | `3` | days an unused worktree with your own commits is kept before it counts as done (see "Cleanup"); also settable globally |
+
+   Global keys (top level of the file):
+
+   | Key | Default | Purpose |
+   | --- | --- | --- |
+   | `idle_days` | `3` | default for every repo; a `[repo.X]` value overrides it |
+   | `reap_trigger_interval` | `"10m"` | minimum gap between the background sweeps that any `wt` command may start |
 
    See
    `docs/superpowers/specs/2026-08-13-worktree-dashboard-design.md` for the
@@ -72,9 +80,14 @@ automatically.
 | `wt status` | JSON for scripting |
 | `wt new <repo> <branch>` | create a bootstrapped sibling worktree |
 | `wt bootstrap <path>` | bootstrap an existing worktree (used by the hook) |
-| `wt reap [path]` | remove an ephemeral worktree if it passes every safety check (used by the `SessionEnd` hook when no path is given) |
+| `wt reap [path]` | remove an ephemeral worktree if it is done and passes every safety check (used by the `SessionEnd` hook when no path is given) |
+| `wt reap --all [--dry-run] [--json]` | sweep every configured repo; `--dry-run` prints `reap` or `keep` plus the reason per worktree and deletes nothing |
+| `wt hooks install claude [--yes]` | add the `SessionEnd` hook to `~/.claude/settings.json` after confirmation |
+| `wt timer install\|uninstall\|status` | manage an hourly background sweep (launchd on macOS, systemd user timer on Linux) |
+| `wt branches --unpushed` | list local branches with unpushed commits and no worktree, as `repo<TAB>branch` |
 | `wt <branch>` | cd to the worktree holding that branch, creating a short-lived one if none does |
-| `wt open <branch>` | the same, for a branch whose name collides with a subcommand |
+| `wt <PR>` | the same for a pull request: `wt 1234`, `wt '#1234'`, or a PR URL |
+| `wt open <branch>` | the same as `wt <branch>`, for a branch whose name collides with a subcommand or is a bare number |
 
 ### Keybindings (dashboard)
 
@@ -86,8 +99,8 @@ automatically.
 | `/` | filter |
 | `q` / `Ctrl-C` | quit |
 
-There is no prune key. See "What `wt` deletes" below for what is (and isn't)
-removed automatically.
+There is no prune key. See "Cleanup" below for what is (and isn't) removed
+automatically.
 
 ### `wt <branch>`
 
@@ -103,15 +116,38 @@ matches and exits instead of hanging.
 
 Otherwise `wt` creates a new worktree under the matching repo's
 `ephemeral_dir` and bootstraps it exactly like `wt new`. That worktree is
-**ephemeral** — see "What `wt` deletes" below for exactly when it gets
-cleaned up automatically. A repo configured with `ephemeral = false` is
+**ephemeral** — see "Cleanup" below for exactly when it gets cleaned up
+automatically. A repo configured with `ephemeral = false` is
 still searched (an existing checkout is still useful to find), but nothing
 new is created there; use `wt new <repo> <branch>` instead.
 
 `wt open <branch>` does the same thing, and exists only so a branch
-genuinely named `status`, `new`, or another reserved word is still
-reachable — `wt status` would otherwise be read as the JSON subcommand, not
-a branch called `status`.
+genuinely named `status`, `new`, `timer`, `1234` or another reserved word or
+number is still reachable — `wt status` would otherwise be read as the JSON
+subcommand, not a branch called `status`.
+
+When wt creates a worktree for a branch that exists only on the remote, the
+local branch it makes is recorded as wt-created (see "Cleanup").
+
+## Pull requests
+
+`wt 1234` opens pull request 1234 the way `wt <branch>` opens a branch. So
+do `wt '#1234'` (quote it in zsh, where `#` starts a comment) and a full PR
+URL. A bare number or `#number` is always a PR; use `wt open 1234` for a
+branch that is actually named `1234`.
+
+A bare number uses the repo containing the current directory. A URL picks
+the configured repo whose `origin` matches it. `wt` asks `gh` for the PR, so
+`gh` must be installed and authenticated.
+
+- A PR from the same repository opens its branch, exactly like `wt <branch>`.
+- A PR from a fork is fetched into a local branch `pr/<N>` (its head is
+  also kept at `refs/remotes/wt-pr/<N>`). It is for review; pushing back to
+  the fork is out of scope.
+- Re-running `wt 1234` cds to the existing worktree. If that worktree is
+  clean and has no commits of yours, it first fast-forwards to the PR's
+  current head. Otherwise it is left alone and `wt` tells you the PR has new
+  commits.
 
 ## Wiring the `WorktreeCreate` hook
 
@@ -149,45 +185,107 @@ the new worktree — `ls -la <new-worktree>/.env*`), and if it didn't, run
 `claude --debug` and inspect what the hook actually receives, then fix the
 `command` above to match.
 
-## What `wt` deletes
+## Cleanup
 
-`wt` deletes automatically exactly one thing: an *ephemeral* worktree it
-created itself via `wt <branch>`. Such a worktree carries a `.wt-ephemeral`
-marker file and lives inside the repo's `ephemeral_dir` (`.worktrees/` by
-default). It is removed only when all of the following hold:
+`wt` removes exactly one kind of worktree on its own: an *ephemeral* one it
+created via `wt <branch>` or `wt <PR>`. Such a worktree carries a
+`.wt-ephemeral` marker file and lives inside the repo's `ephemeral_dir`
+(`.worktrees/` by default). It is removed when it is **done** and safe to
+remove.
 
-- the working tree is clean, and `git status` actually succeeded
-- the branch has an upstream **and** no unpushed commits
-- no Claude session is live in it, and none of the processes `wt` recognises
-  are running there
-- `git worktree remove` (never `--force`) agrees to remove it
+### When a worktree is done
 
-That third point is narrower than it sounds, so read it literally. `wt` only
-looks up the working directory of processes matching the same keyword list
-the dashboard's process pane uses — `deno`, `node`, `supabase`, `psql`,
-`docker`, `go run`, `vite`, `next` — because resolving every process's cwd is
-the slow part of a refresh. A `cargo build`, a `pytest` run, a `make`, or a
-plain shell sitting in an ephemeral worktree is invisible to the reap and will
-not block it. That output — `target/`, `.pytest_cache/`, and similar — is
-usually gitignored, so it doesn't dirty the tree either, and the reap deletes
-the worktree and with it whatever build output was there; restoring from the
-trash brings the worktree back and re-runs bootstrap, not those files.
-Everything else that should block still does: tracked modifications,
-untracked non-ignored files, unpushed commits, a branch with no upstream, and
-a live Claude session.
+Your own commits are the ones on the worktree's branch, made since wt created
+it, whose author email matches `git config user.email`.
 
-Even then the removal is a **soft delete**: it goes to the trash, so `<space>t`
-can restore it, and the branch is always left alone. A reap is unattended —
-nobody is watching to catch a mistake — so it stays recoverable regardless of
-`delete_mode`, which governs only the dashboard's manual, confirmed delete.
+- **No commits of your own** (a review): done as soon as it is safe to remove.
+- **Commits of your own**: done once it is safe to remove and either the
+  branch's PR is merged or closed, or the worktree has sat unused for
+  `idle_days` (default 3). "Unused" counts session activity, git index and
+  `HEAD` reflog changes, and the last time `wt` opened the worktree.
+
+For worktrees created by an older `wt`, your own commits are the ones you
+authored that exist on no remote.
+
+### What is never removed
+
+- A worktree with uncommitted or untracked changes, including inside its
+  submodules.
+- A worktree with a live Claude session, or with a process `wt` recognises
+  running in it.
+- A worktree locked with `git worktree lock`.
+- Your primary checkouts, hand-made siblings, worktrees from `wt new`, and
+  any worktree whose marker is gone.
+
+The live-process check only looks at the keywords the dashboard's process
+pane uses — `deno`, `node`, `supabase`, `psql`, `docker`, `go run`, `vite`,
+`next` — because resolving every process's cwd is the slow part of a refresh.
+A `cargo build`, a `pytest` run, a `make`, or a plain shell is invisible to
+it and will not block removal. Their output (`target/`, `.pytest_cache/`) is
+usually gitignored, so it doesn't dirty the tree either, and it goes with the
+worktree.
+
+Liveness and cleanliness are checked again immediately before removal, so a
+session opened mid-sweep still saves the worktree. A worktree with
+initialized submodules is removed with a single `git worktree remove
+--force`, which git requires for submodules; the checks above are what make
+that safe, and a lock is never overridden.
+
+### The 15-minute grace
+
+Sweeps — `wt reap --all`, the background sweep, the dashboard refresh and the
+timer — skip any worktree created or opened less than 15 minutes ago. A
+review worktree you just made has no session yet and would otherwise look
+abandoned. The `SessionEnd` hook and `wt reap <path>` do not apply the grace:
+they are triggered by you finishing, and run immediately.
+
+### Branches survive
+
+Removal is a **soft delete**: the worktree goes to the trash, so `<space>t`
+can restore it. The branch is kept, with one exception: a branch that wt
+itself created (`pr/<N>` for fork PRs, or a local branch made for a
+remote-only `wt <branch>`) is deleted with the worktree if every commit on it
+is on a remote. It can be fetched again, and restoring the worktree does so.
+Anything else, including a branch you created yourself, stays.
 
 A restored worktree loses its marker along with its directory, so it becomes
 permanent and is never reaped again.
 
-Anything else — your primary checkouts, hand-made siblings, worktrees created
-by `wt new`, and any worktree whose marker you deleted — is never touched
-automatically. There is no general `prune` subcommand, and none should be
-added.
+### Seeing why something is still there
+
+```bash
+wt reap --all --dry-run          # one reap/keep line with a reason per worktree
+wt reap --all --dry-run --json   # the same, for scripting
+```
+
+Nothing is deleted. Real decisions are also appended to
+`~/.local/state/wt/reap.log` with their reason.
+
+### Triggers
+
+- `wt hooks install claude` merges a `SessionEnd` hook into
+  `~/.claude/settings.json` so a worktree is collected when its session ends.
+  It shows what it will add and asks first (`--yes` skips the question; the
+  previous file is saved as `settings.json.wt-backup`). See "Wiring the
+  `SessionEnd` hook" below.
+- Any `wt` command may start a detached background `wt reap --all`, at most
+  once per `reap_trigger_interval` (default `10m`). The command you ran never
+  waits for it. Two sweeps never run at once.
+- `wt timer install` adds an hourly `wt reap --all`: a launchd agent on macOS,
+  a systemd user timer on Linux. It is optional, but it is the only trigger
+  that fires `idle_days` for a worktree nobody touches again.
+  `wt timer status` and `wt timer uninstall` do what they say.
+
+### Unpushed work
+
+A branch's commits are no longer required to be pushed before its worktree
+goes, since the branch stays. To find work that exists only locally:
+
+```bash
+wt branches --unpushed
+```
+
+It lists local branches with commits on no remote and no worktree.
 
 Known gap: `git stash` writes to `refs/stash` in the shared common dir, so a
 stash created inside an ephemeral worktree survives that worktree's removal.
@@ -195,8 +293,8 @@ The work is recoverable via `git stash list`, but the situation is confusing.
 
 ## Wiring the `SessionEnd` hook
 
-Add this to `~/.claude/settings.json` under `hooks` to have ephemeral
-worktrees collected when a session ends:
+`wt hooks install claude` does this for you. To do it by hand, add this to
+`~/.claude/settings.json` under `hooks`:
 
 ```json
 {
@@ -204,7 +302,7 @@ worktrees collected when a session ends:
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "$HOME/.local/bin/wt reap" }
+          { "type": "command", "command": "$HOME/.local/bin/wt reap", "timeout": 30 }
         ]
       }
     ]
@@ -213,12 +311,12 @@ worktrees collected when a session ends:
 ```
 
 With no argument, `wt reap` reads the SessionEnd JSON from stdin and does
-nothing unless the directory is an ephemeral worktree that passes every check
-above. Payload shape verified against the hook documentation on 2026-08-13:
+nothing unless the directory is an ephemeral worktree that is done and passes
+every check in "Cleanup". Payload shape verified against the hook documentation on 2026-08-13:
 `session_id`, `cwd`, `reason` and friends arrive as JSON on stdin.
 
 The hook is not guaranteed to run after a crash or `kill -9`, which is why
-`wt` also sweeps on launch. Refusals are recorded in
+`wt` also sweeps in the background. Decisions are recorded in
 `~/.local/state/wt/reap.log`.
 
 ## Limitations
@@ -236,7 +334,7 @@ The hook is not guaranteed to run after a crash or `kill -9`, which is why
   `supabase`, `psql`, `docker`, `go run`, `vite`, `next`), chosen to keep the
   dashboard's refresh fast. A long-running process outside that list (a
   `cargo build`, a bare shell) is invisible to both the dashboard's process
-  pane and the ephemeral-worktree reaper — see "What `wt` deletes" above.
+  pane and the ephemeral-worktree reaper — see "Cleanup" above.
 - **The `WorktreeCreate` hook payload shape is unverified**, as noted above —
   confirm it actually fires bootstrap on your setup before relying on it.
 - **`git stash` survives worktree removal but is easy to lose track of**: a

@@ -269,7 +269,9 @@ func main() {
 
 // usage is the one-line summary printed by `wt help` and by the unknown
 // -reserved-word failure path.
-const usage = "usage: wt [status|new|bootstrap|reap|hook <name>|open <branch>|<branch>]"
+const usage = "usage: wt [status|new|bootstrap|open <branch>|<branch>|<PR>|" +
+	"reap [<path>|--all] [--dry-run] [--json]|hooks install claude|timer install|uninstall|status|" +
+	"branches --unpushed|hook <name>]"
 
 // nonNilWorkspaces normalises a nil slice to an empty one. wt status is a
 // scripting interface, and encoding/json marshals a nil slice as `null`,
@@ -352,7 +354,8 @@ func handOff(path, sessionID string) {
 // of these is still reachable.
 var reservedCommands = map[string]bool{
 	"status": true, "new": true, "bootstrap": true, "reap": true,
-	"open": true, "hook": true, "help": true, "-h": true, "--help": true,
+	"open": true, "hook": true, "hooks": true, "timer": true, "branches": true,
+	"help": true, "-h": true, "--help": true,
 }
 
 func isReservedCommand(arg string) bool { return reservedCommands[arg] }
