@@ -39,6 +39,9 @@ type Repo struct {
 	EphemeralPostCreate []string `toml:"ephemeral_post_create"`
 	DefaultRemote       string   `toml:"default_remote"`
 	Ephemeral           *bool    `toml:"ephemeral"`
+	// IdleDays overrides Config.IdleDays for this repo. See
+	// Config.EffectiveIdleDays.
+	IdleDays int `toml:"idle_days"`
 }
 
 // Config is the whole of ~/.config/wt/config.toml.
@@ -61,6 +64,16 @@ type Config struct {
 	// HerdrStartupDashboard controls whether the dashboard opens by itself
 	// when herdr starts. See EffectiveHerdrStartupDashboard.
 	HerdrStartupDashboard string `toml:"herdr_startup_dashboard"`
+
+	// IdleDays is how long an ephemeral worktree with commits of your own
+	// may sit unused before the reaper treats it as done. See
+	// EffectiveIdleDays.
+	IdleDays int `toml:"idle_days"`
+
+	// ReapTriggerInterval rate-limits the background sweep that any wt
+	// command may start. A Go duration string. See
+	// EffectiveReapTriggerInterval.
+	ReapTriggerInterval string `toml:"reap_trigger_interval"`
 }
 
 // defaultTrashRetentionDays applies whenever trash_retention_days is absent
@@ -88,6 +101,37 @@ func (c Config) EffectiveTrashRetention() time.Duration {
 		days = defaultTrashRetentionDays
 	}
 	return time.Duration(days) * 24 * time.Hour
+}
+
+const (
+	defaultIdleDays            = 3
+	defaultReapTriggerInterval = 10 * time.Minute
+)
+
+// EffectiveIdleDays returns the idle limit for repo: the repo's own
+// idle_days, else the global one, else 3. Non-positive values count as
+// absent -- a zero limit would make every committed-to worktree "idle" the
+// moment it was created.
+func (c Config) EffectiveIdleDays(repo string) int {
+	if r, ok := c.Repos[repo]; ok && r.IdleDays > 0 {
+		return r.IdleDays
+	}
+	if c.IdleDays > 0 {
+		return c.IdleDays
+	}
+	return defaultIdleDays
+}
+
+// EffectiveReapTriggerInterval returns the minimum gap between background
+// sweeps. An unparseable or non-positive value falls back to 10m rather
+// than failing the config load: the keys next to it govern deletion, and a
+// typo here must not stop wt from reading them.
+func (c Config) EffectiveReapTriggerInterval() time.Duration {
+	d, err := time.ParseDuration(c.ReapTriggerInterval)
+	if err != nil || d <= 0 {
+		return defaultReapTriggerInterval
+	}
+	return d
 }
 
 // Startup-dashboard modes for herdr_startup_dashboard.
