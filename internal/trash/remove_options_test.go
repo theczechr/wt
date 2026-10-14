@@ -87,3 +87,40 @@ func TestRestoreRefetchesADeletedPRBranch(t *testing.T) {
 		t.Errorf("restored HEAD = %s, want the PR head %s", got, sha)
 	}
 }
+
+func TestRestoreOntoExistingPRBranchSucceeds(t *testing.T) {
+	t.Setenv("WT_CACHE_DIR", t.TempDir())
+	r := gittest.New(t)
+	r.Git(t, r.Origin, "update-ref", "refs/pull/9/head", "main")
+	r.Git(t, r.Primary, "branch", "pr/9", "origin/main")
+
+	wt := filepath.Join(r.Primary, ".worktrees", "pr-9")
+	e := trash.Entry{Path: wt, Repo: "demo", Branch: "pr/9", Primary: r.Primary, PR: 9, BranchDeleted: true}
+	if err := trash.Restore(context.Background(), e, config.Repo{}); err != nil {
+		t.Fatalf("Restore onto an existing branch: %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("the worktree must exist: %v", err)
+	}
+}
+
+func TestRestoreIsRetryableOnceTheBranchExists(t *testing.T) {
+	t.Setenv("WT_CACHE_DIR", t.TempDir())
+	r := gittest.New(t)
+	r.Git(t, r.Origin, "update-ref", "refs/pull/9/head", "main")
+
+	wt := filepath.Join(r.Primary, ".worktrees", "pr-9")
+	e := trash.Entry{Path: wt, Repo: "demo", Branch: "pr/9", Primary: r.Primary, PR: 9, BranchDeleted: true}
+	if err := trash.Restore(context.Background(), e, config.Repo{}); err != nil {
+		t.Fatalf("first Restore: %v", err)
+	}
+	// Simulate a worktree that was removed again, with the branch left behind
+	// (the state a failed worktree add leaves). The second Restore must work.
+	r.Git(t, r.Primary, "worktree", "remove", wt)
+	if err := trash.Restore(context.Background(), e, config.Repo{}); err != nil {
+		t.Fatalf("second Restore must succeed with the branch already present: %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("the worktree must exist after the second Restore: %v", err)
+	}
+}

@@ -92,8 +92,13 @@ func SoftDeleteWith(ctx context.Context, ws model.Workspace, primary string, opt
 
 // recreateBranch fetches a branch that SoftDeleteWith deleted. A PR entry
 // comes back from refs/pull/<n>/head (works for fork and same-repo PRs);
-// anything else from the remote branch of the same name.
+// anything else from the remote branch of the same name. A branch that
+// already exists is left as it is, so a Restore that failed after creating
+// it (or a branch recreated by hand) can be retried.
 func recreateBranch(ctx context.Context, e Entry, remote string) error {
+	if exec.CommandContext(ctx, "git", "-C", e.Primary, "show-ref", "--verify", "--quiet", "refs/heads/"+e.Branch).Run() == nil {
+		return nil
+	}
 	from := remote + "/" + e.Branch
 	fetch := []string{"-C", e.Primary, "fetch", "-q", remote, e.Branch}
 	if e.PR > 0 {
