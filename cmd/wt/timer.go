@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -48,15 +49,28 @@ func launchdPlist(exe string) string {
 `
 }
 
+// systemdExecQuote escapes an ExecStart argument for systemd: `$` and `%`
+// are expanded even inside double quotes, and `\` and `"` are C escapes.
+var systemdExecQuote = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `$$`, `%`, `%%`)
+
 func systemdService(exe string) string {
 	return "[Unit]\nDescription=wt: reap finished ephemeral worktrees\n\n" +
-		"[Service]\nType=oneshot\nExecStart=\"" + exe + "\" reap --all --quiet\n"
+		"[Service]\nType=oneshot\nExecStart=\"" + systemdExecQuote.Replace(exe) + "\" reap --all --quiet\n"
 }
 
 func systemdTimer() string {
 	return "[Unit]\nDescription=Hourly wt reap\n\n" +
 		"[Timer]\nOnBootSec=15min\nOnUnitActiveSec=1h\n\n" +
 		"[Install]\nWantedBy=timers.target\n"
+}
+
+// writeLaunchAgent creates the LaunchAgents directory and writes the plist.
+func writeLaunchAgent(plistPath, exe string) error {
+	err := os.MkdirAll(filepath.Dir(plistPath), 0o755)
+	if err == nil {
+		err = os.WriteFile(plistPath, []byte(launchdPlist(exe)), 0o644)
+	}
+	return err
 }
 
 func run(stderr io.Writer, name string, args ...string) error {
@@ -88,10 +102,7 @@ func runTimer(args []string, stdout, stderr io.Writer) int {
 		domain := "gui/" + strconv.Itoa(os.Getuid())
 		switch args[0] {
 		case "install":
-			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err == nil {
-				err = os.WriteFile(plist, []byte(launchdPlist(exe)), 0o644)
-			}
-			if err != nil {
+			if err := writeLaunchAgent(plist, exe); err != nil {
 				fmt.Fprintln(stderr, "wt: timer:", err)
 				return 1
 			}
