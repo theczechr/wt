@@ -140,6 +140,13 @@ func worktreeFor(ctx context.Context, primary, branch string) string {
 	return ""
 }
 
+// sameCommit reports whether two refs in repo resolve to the same commit.
+func sameCommit(ctx context.Context, repo, a, b string) bool {
+	oa, ea := exec.CommandContext(ctx, "git", "-C", repo, "rev-parse", "--verify", "-q", a+"^{commit}").Output()
+	ob, eb := exec.CommandContext(ctx, "git", "-C", repo, "rev-parse", "--verify", "-q", b+"^{commit}").Output()
+	return ea == nil && eb == nil && bytes.Equal(oa, ob)
+}
+
 // fetchPR fetches PR head into refs/remotes/wt-pr/<n> (see model.PRRemoteRef).
 func fetchPR(ctx context.Context, primary, remote string, n int) error {
 	spec := fmt.Sprintf("+refs/pull/%d/head:%s", n, model.PRRemoteRef(n))
@@ -180,7 +187,11 @@ func openPR(cfg config.Config, ref prRef, cwd string, stderr io.Writer) (string,
 			return "", err
 		}
 		// Only an ephemeral has a marker; a permanent worktree stays as is.
-		_ = ephemeral.UpdateMarker(path, func(m *ephemeral.Marker) { m.PR = pr.Number })
+		if _, merr := ephemeral.ReadMarker(path); merr == nil {
+			if err := ephemeral.UpdateMarker(path, func(m *ephemeral.Marker) { m.PR = pr.Number }); err != nil {
+				return "", fmt.Errorf("opened %s but could not record PR #%d in its marker: %w", path, pr.Number, err)
+			}
+		}
 		return path, nil
 	}
 
@@ -197,6 +208,8 @@ func openPR(cfg config.Config, ref prRef, cwd string, stderr io.Writer) (string,
 			return "", fmt.Errorf("creating %s: %w: %s", branch, err, bytes.TrimSpace(out))
 		}
 		created = true
+	} else if !sameCommit(ctx, primary, "refs/heads/"+branch, model.PRRemoteRef(pr.Number)) {
+		fmt.Fprintf(stderr, "wt: %s already exists at an older commit; using it as is\n", branch)
 	}
 	target := filepath.Join(primary, r.EphemeralDirOrDefault(), bootstrap.Slug(branch))
 	if err := ephemeral.EnsureExcluded(ctx, primary,
@@ -245,6 +258,11 @@ func updateToPRHead(ctx context.Context, wt, primary, remote string, pr ghPR, st
 	if err == nil && len(bytes.TrimSpace(status)) == 0 && own == 0 {
 		if out, err := exec.CommandContext(ctx, "git", "-C", wt, "merge", "--ff-only", "-q", pr.HeadRefOid).CombinedOutput(); err != nil {
 			fmt.Fprintf(stderr, "wt: could not fast-forward to the PR head: %s\n", bytes.TrimSpace(out))
+			return
+		}
+		// Pulled commits are not the user's work, even when the user wrote the PR.
+		if err := ephemeral.UpdateMarker(wt, func(m *ephemeral.Marker) { m.Start = pr.HeadRefOid }); err != nil {
+			fmt.Fprintf(stderr, "wt: fast-forwarded, but could not advance the marker's start commit: %v\n", err)
 		}
 		return
 	}

@@ -208,3 +208,46 @@ func TestOpenStillOpensANumericBranch(t *testing.T) {
 		t.Errorf("checked out %q, want 1234", b)
 	}
 }
+
+// pushPRHead advances refs/pull/<n>/head on origin by one commit authored by
+// the test identity, the same email the primary's user.email carries.
+func pushPRHead(t *testing.T, r *gittest.Repo, n int, parent, file string) string {
+	t.Helper()
+	r.Git(t, r.Origin, "checkout", "-q", "-b", "tmp-"+file, parent)
+	r.WriteCommit(t, r.Origin, file, "z")
+	sha := strings.TrimSpace(r.Git(t, r.Origin, "rev-parse", "HEAD"))
+	r.Git(t, r.Origin, "update-ref", fmt.Sprintf("refs/pull/%d/head", n), sha)
+	r.Git(t, r.Origin, "checkout", "-q", "main")
+	return sha
+}
+
+func TestOpenPRKeepsFastForwardingWhenTheUserAuthoredThePR(t *testing.T) {
+	t.Setenv("WT_CACHE_DIR", t.TempDir())
+	r := gittest.New(t)
+	sha := forkPR(t, r, 7, "one.txt")
+	fakeGH(t, ghJSON(7, "main", sha, true))
+	cfg := cfgFor(r, config.Repo{})
+	path, err := openPR(cfg, prRef{Number: 7}, r.Primary, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha2 := pushPRHead(t, r, 7, sha, "two.txt")
+	fakeGH(t, ghJSON(7, "main", sha2, true))
+	if _, err := openPR(cfg, prRef{Number: 7}, r.Primary, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(r.Git(t, path, "rev-parse", "HEAD")); got != sha2 {
+		t.Fatalf("first update: HEAD = %s, want %s", got, sha2)
+	}
+	if m, _ := ephemeral.ReadMarker(path); m.Start != sha2 {
+		t.Errorf("marker Start = %s, want the new head %s", m.Start, sha2)
+	}
+	sha3 := pushPRHead(t, r, 7, sha2, "three.txt")
+	fakeGH(t, ghJSON(7, "main", sha3, true))
+	if _, err := openPR(cfg, prRef{Number: 7}, r.Primary, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(r.Git(t, path, "rev-parse", "HEAD")); got != sha3 {
+		t.Errorf("second update: HEAD = %s, want %s", got, sha3)
+	}
+}
