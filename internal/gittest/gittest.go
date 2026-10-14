@@ -107,3 +107,27 @@ func (r *Repo) PushNewBranch(t *testing.T, branch string) {
 	r.Git(t, r.Primary, "checkout", "-q", start)
 	r.Git(t, r.Primary, "branch", "-qD", branch)
 }
+
+// AddSubmodule adds a submodule at "sub" (a separate throwaway repo) to the
+// primary's main, commits it and pushes main to origin, so worktrees created
+// afterwards contain it.
+//
+// git ≥ 2.38 refuses file:// submodule transport by default. The override
+// is set with t.Setenv so it reaches wt's own git subprocesses too (Restore
+// re-runs `git submodule update --init` through bootstrap).
+func (r *Repo) AddSubmodule(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+	sub := filepath.Join(filepath.Dir(r.Origin), "subrepo")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.Git(t, sub, "init", "-q", "-b", "main")
+	r.configure(t, sub)
+	r.WriteCommit(t, sub, "lib.txt", "lib\n")
+	r.Git(t, r.Primary, "submodule", "add", "-q", sub, "sub")
+	r.Git(t, r.Primary, "commit", "-qm", "add submodule")
+	r.Git(t, r.Primary, "push", "-q", "origin", "main")
+}
