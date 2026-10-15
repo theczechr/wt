@@ -330,3 +330,30 @@ func TestBlockersRefusesClaimedBgSpareInWorktree(t *testing.T) {
 		t.Error("the worktree must survive:", err)
 	}
 }
+
+// A commit reachable only from a tag (or refs/stash) in a submodule is on no
+// branch and not on HEAD, yet --force would still delete the only copy.
+func TestReapRefusesSubmoduleCommitReachableOnlyFromATag(t *testing.T) {
+	r := gittest.New(t)
+	r.AddSubmodule(t)
+	cfg, wt := newEphemeral(t, r, "feat/sub-tag-only")
+	r.Git(t, wt, "submodule", "update", "--init", "-q")
+	sub := filepath.Join(wt, "sub")
+	pinned := strings.TrimSpace(r.Git(t, sub, "rev-parse", "HEAD"))
+	r.Git(t, sub, "checkout", "-q", "--detach")
+	r.Git(t, sub, "commit", "-q", "--allow-empty", "-m", "tagged only")
+	sha := strings.TrimSpace(r.Git(t, sub, "rev-parse", "HEAD"))
+	r.Git(t, sub, "tag", "keepme")
+	r.Git(t, sub, "checkout", "-q", "--detach", pinned)
+
+	b := ephemeral.Blockers(context.Background(), cfg, wt)
+	if !blockersContain(b, "exist on no remote") {
+		t.Fatalf("a tag-only submodule commit must block, got %v", b)
+	}
+	if _, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()}); err == nil {
+		t.Fatal("ReapWith must refuse")
+	}
+	if _, err := r.TryGit(sub, "cat-file", "-e", sha+"^{commit}"); err != nil {
+		t.Errorf("the tagged commit must still exist: %v", err)
+	}
+}

@@ -198,13 +198,13 @@ func submodulesDirty(ctx context.Context, worktree string) (bool, error) {
 	return out != "", nil
 }
 
-// submoduleUnpushedScript prints, for one submodule, how many commits on its
-// local branches and on its HEAD exist on no remote-tracking ref. The &&
-// chain makes any failing rev-list fail the whole foreach, so an unreadable
-// count is an error rather than an empty line.
-const submoduleUnpushedScript = `a=$(git rev-list --count --branches --not --remotes) &&
-b=$(git rev-list --count HEAD --not --remotes) &&
-echo "$a $b"`
+// submoduleUnpushedScript prints, for one submodule, how many commits
+// reachable from any of its refs -- branches, tags, refs/stash -- or from its
+// HEAD exist on no remote-tracking ref. --all covers HEAD as well, so a
+// detached commit and a tag-only commit are both counted. The && makes a
+// failing rev-list fail the whole foreach, so an unreadable count is an
+// error rather than an empty line.
+const submoduleUnpushedScript = `n=$(git rev-list --count --all --not --remotes) && echo "$n"`
 
 // submodulesUnpushed reports whether any initialized submodule, recursively,
 // holds a commit that exists on no remote. In a linked worktree a
@@ -221,18 +221,12 @@ func submodulesUnpushed(ctx context.Context, worktree string) (bool, error) {
 		if line == "" {
 			continue
 		}
-		f := strings.Fields(line)
-		if len(f) != 2 {
-			return false, fmt.Errorf("unreadable submodule commit counts %q", line)
+		n, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			return false, fmt.Errorf("unreadable submodule commit count %q: %w", line, err)
 		}
-		for _, v := range f {
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return false, fmt.Errorf("unreadable submodule commit count %q: %w", v, err)
-			}
-			if n != 0 {
-				return true, nil
-			}
+		if n != 0 {
+			return true, nil
 		}
 	}
 	return false, nil
