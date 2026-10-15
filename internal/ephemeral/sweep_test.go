@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/theczechr/ephemera/internal/config"
@@ -69,5 +70,56 @@ func TestSweepOnAMissingEphemeralDirIsNotAnError(t *testing.T) {
 	}
 	if len(decisions) != 0 {
 		t.Errorf("got %v, want nothing", decisions)
+	}
+}
+
+// A dry run accounts for every directory in the ephemeral dir, so a user can
+// see why one is never touched. A real sweep stays silent about them.
+func TestSweepDryRunReportsDirectoriesWithoutAUsableMarker(t *testing.T) {
+	r := gittest.New(t)
+	cfg, _ := newEphemeral(t, r, "feat/marked-dry")
+	unmarked := filepath.Join(r.Primary, ".worktrees", "not-ours")
+	corrupt := filepath.Join(r.Primary, ".worktrees", "corrupt")
+	for _, d := range []string{unmarked, corrupt} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(corrupt, ephemeral.MarkerName), []byte("{nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	primaries := map[string]string{"demo": r.Primary}
+
+	ds, err := ephemeral.Sweep(context.Background(), cfg, primaries, ephemeral.SweepOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]ephemeral.Decision{}
+	for _, d := range ds {
+		byPath[d.Path] = d
+	}
+	if d, ok := byPath[unmarked]; !ok || d.Reap || d.Reason != "no .wt-ephemeral marker: not created by wt; never removed automatically" {
+		t.Errorf("unmarked dir decision = %+v (present %v)", d, ok)
+	}
+	if d, ok := byPath[corrupt]; !ok || d.Reap || !strings.HasPrefix(d.Reason, "marker unreadable: ") {
+		t.Errorf("corrupt marker decision = %+v (present %v)", d, ok)
+	}
+
+	ds, err = ephemeral.Sweep(context.Background(), cfg, primaries, ephemeral.SweepOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range ds {
+		if d.Path == unmarked || d.Path == corrupt {
+			t.Errorf("a real sweep must not report unmarked dirs: %+v", d)
+		}
+	}
+	if log, _ := os.ReadFile(filepath.Join(ephemeral.StateDir(), "reap.log")); strings.Contains(string(log), "not-ours") || strings.Contains(string(log), "corrupt") {
+		t.Errorf("reap.log must not mention unmarked dirs:\n%s", log)
+	}
+	for _, d := range []string{unmarked, corrupt} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("%s must survive: %v", d, err)
+		}
 	}
 }

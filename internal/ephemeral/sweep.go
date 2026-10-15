@@ -2,6 +2,8 @@ package ephemeral
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -61,7 +63,14 @@ func Sweep(ctx context.Context, cfg config.Config, primaries map[string]string, 
 			}
 			path := filepath.Join(root, e.Name())
 			if _, err := ReadMarker(path); err != nil {
-				continue // not wt's to remove
+				// Not wt's to remove. A dry run says so, so a user asking
+				// "why is this never cleaned up" gets an answer (spec §8);
+				// a real sweep stays silent rather than log every stray dir
+				// on every run.
+				if opts.DryRun {
+					out = append(out, unmarkedDecision(name, path, err))
+				}
+				continue
 			}
 			// No session exemption: a sweep runs from a `wt` launch, not from
 			// a session's own SessionEnd hook, so every live session it can
@@ -77,4 +86,14 @@ func Sweep(ctx context.Context, cfg config.Config, primaries map[string]string, 
 		}
 	}
 	return out, nil
+}
+
+// unmarkedDecision is the dry-run verdict for a directory with no usable
+// marker.
+func unmarkedDecision(repo, path string, err error) Decision {
+	reason := "no " + MarkerName + " marker: not created by wt; never removed automatically"
+	if !errors.Is(err, os.ErrNotExist) {
+		reason = fmt.Sprintf("marker unreadable: %v", err)
+	}
+	return Decision{Path: path, Repo: repo, Reason: reason}
 }
