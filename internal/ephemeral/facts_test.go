@@ -133,3 +133,21 @@ func TestPRStatePassesThroughKnownState(t *testing.T) {
 		t.Fatalf("PRState = %q, want MERGED", got)
 	}
 }
+
+// Email case is not identity: a commit made as WT@Test.Invalid is still the
+// user's own when user.email is wt@test.invalid. Missing it would read the
+// worktree as "no commits of your own" and reap it on sight.
+func TestOwnCommitsMatchesAuthorEmailCaseInsensitively(t *testing.T) {
+	r := gittest.New(t)
+	_, wt := newEphemeral(t, r, "feat/email-case")
+	m, _ := ephemeral.ReadMarker(wt)
+	m.Start = head(t, r, wt)
+	r.Git(t, wt, "-c", "user.email=WT@Test.Invalid", "commit", "-q", "--allow-empty", "-m", "mine, other case")
+	n, err := ephemeral.OwnCommits(context.Background(), wt, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("OwnCommits = %d, want 1", n)
+	}
+}

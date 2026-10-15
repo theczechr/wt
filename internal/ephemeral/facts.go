@@ -42,8 +42,10 @@ func OwnCommits(ctx context.Context, worktree string, m Marker) (int, error) {
 	args := []string{"rev-list", "--count"}
 	if email, err := gitOut(ctx, worktree, "config", "user.email"); err == nil && email != "" {
 		// --fixed-strings: emails contain '.' and '+', which are regex
-		// metacharacters. Verified against git 2.50 on 2026-10-15.
-		args = append(args, "--fixed-strings", "--author=<"+email+">")
+		// metacharacters. --regexp-ignore-case: email case is not identity,
+		// and a miss here reads own work as someone else's. git honors -i
+		// together with -F for --author (verified, git 2.50.1, 2026-10-15).
+		args = append(args, "--fixed-strings", "--regexp-ignore-case", "--author=<"+email+">")
 	}
 	if m.Start != "" {
 		args = append(args, m.Start+"..HEAD")
