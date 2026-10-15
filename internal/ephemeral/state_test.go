@@ -62,3 +62,26 @@ func TestSweepDryRunDeletesNothing(t *testing.T) {
 		t.Error("dry run must not remove anything:", err)
 	}
 }
+
+// reap.log is one tab-separated line per reap. A git diagnostic folded into
+// an error (withStderr) can carry newlines and tabs; they must not split the
+// line or shift its columns.
+func TestLogReapFlattensControlWhitespace(t *testing.T) {
+	t.Setenv("WT_STATE_DIR", t.TempDir())
+	ephemeral.LogReap("/w/x", errors.New("refusing:\tgit said\nfatal: bad\r"), "first\nsecond\tthird")
+	body, err := os.ReadFile(filepath.Join(ephemeral.StateDir(), "reap.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want one line, got %d: %q", len(lines), body)
+	}
+	cols := strings.Split(lines[0], "\t")
+	if len(cols) != 4 {
+		t.Fatalf("want 4 columns, got %d: %q", len(cols), lines[0])
+	}
+	if cols[2] != "refusing: git said fatal: bad " || cols[3] != "first second third" {
+		t.Errorf("columns = %q", cols)
+	}
+}

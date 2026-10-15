@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -76,5 +77,11 @@ func LogReap(worktree string, err error, reason string) {
 	if err != nil {
 		outcome = err.Error()
 	}
-	fmt.Fprintf(f, "%s\t%s\t%s\t%s\n", time.Now().Format(time.RFC3339), worktree, outcome, reason)
+	fmt.Fprintf(f, "%s\t%s\t%s\t%s\n", time.Now().Format(time.RFC3339), worktree,
+		logField.Replace(outcome), logField.Replace(reason))
 }
+
+// logField keeps a free-text column on one line and in its own column: git
+// diagnostics folded into errors carry newlines, and a tab would shift every
+// column after it.
+var logField = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ")
