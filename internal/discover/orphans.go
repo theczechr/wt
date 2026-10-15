@@ -19,8 +19,10 @@ func UnpushedOrphans(ctx context.Context, primary string) ([]string, error) {
 	for _, w := range ws {
 		checkedOut[w.Branch] = true
 	}
+	// lstrip=2, not :short -- a tag sharing a branch's name turns the short
+	// form into "heads/<name>", which matches no worktree and no ref below.
 	out, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", primary,
-		"for-each-ref", "--format=%(refname:short)", "refs/heads/").Output()
+		"for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/").Output()
 	if err != nil {
 		return nil, err
 	}

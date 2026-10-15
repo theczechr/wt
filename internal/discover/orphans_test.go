@@ -33,3 +33,25 @@ func TestUnpushedOrphans(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+// A tag sharing a branch's name makes %(refname:short) disambiguate to
+// "heads/<name>"; branch names must come out unchanged regardless.
+func TestUnpushedOrphansWithATagNamedLikeABranch(t *testing.T) {
+	r := gittest.New(t)
+	r.Git(t, r.Primary, "checkout", "-q", "-b", "feat/orphan")
+	r.WriteCommit(t, r.Primary, "o.txt", "x")
+	r.Git(t, r.Primary, "tag", "feat/orphan")
+	r.Git(t, r.Primary, "checkout", "-q", "main")
+	wt := filepath.Join(r.Primary, ".worktrees", "busy")
+	r.Git(t, r.Primary, "worktree", "add", "-q", "-b", "feat/busy", wt)
+	r.WriteCommit(t, wt, "b.txt", "x")
+	r.Git(t, r.Primary, "tag", "feat/busy", "feat/busy")
+
+	got, err := discover.UnpushedOrphans(context.Background(), r.Primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"feat/orphan"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
