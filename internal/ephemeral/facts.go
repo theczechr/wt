@@ -201,10 +201,13 @@ func submodulesDirty(ctx context.Context, worktree string) (bool, error) {
 // submoduleUnpushedScript prints, for one submodule, how many commits
 // reachable from any of its refs -- branches, tags, refs/stash -- or from its
 // HEAD exist on no remote-tracking ref. --all covers HEAD as well, so a
-// detached commit and a tag-only commit are both counted. The && makes a
+// detached commit and a tag-only commit are both counted; --reflog adds
+// commits reachable only through a reflog, such as an older stash entry
+// (stash@{1} and beyond live only in refs/stash's reflog) or a commit
+// undone by reset --hard. The && makes a
 // failing rev-list fail the whole foreach, so an unreadable count is an
 // error rather than an empty line.
-const submoduleUnpushedScript = `n=$(git rev-list --count --all --not --remotes) && echo "$n"`
+const submoduleUnpushedScript = `n=$(git rev-list --count --all --reflog --not --remotes) && echo "$n"`
 
 // submodulesUnpushed reports whether any initialized submodule, recursively,
 // holds a commit that exists on no remote. In a linked worktree a

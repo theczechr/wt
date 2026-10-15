@@ -432,3 +432,30 @@ func TestBlockersExemptTheClaudeBehindShells(t *testing.T) {
 		t.Errorf("the hook's own claude behind shells must be exempt, got %v", b)
 	}
 }
+
+// A commit reachable only through a submodule's reflog (an older stash entry,
+// or a commit undone by reset --hard) is still recoverable work that exists
+// nowhere else, and --force would delete it.
+func TestReapRefusesSubmoduleCommitReachableOnlyFromTheReflog(t *testing.T) {
+	r := gittest.New(t)
+	r.AddSubmodule(t)
+	cfg, wt := newEphemeral(t, r, "feat/sub-reflog-only")
+	r.Git(t, wt, "submodule", "update", "--init", "-q")
+	sub := filepath.Join(wt, "sub")
+	pinned := strings.TrimSpace(r.Git(t, sub, "rev-parse", "HEAD"))
+	r.Git(t, sub, "checkout", "-q", "--detach")
+	r.WriteCommit(t, sub, "undone.txt", "only in the reflog\n")
+	sha := strings.TrimSpace(r.Git(t, sub, "rev-parse", "HEAD"))
+	r.Git(t, sub, "reset", "-q", "--hard", pinned)
+
+	b := ephemeral.Blockers(context.Background(), cfg, wt)
+	if !blockersContain(b, "exist on no remote") {
+		t.Fatalf("a reflog-only submodule commit must block, got %v", b)
+	}
+	if _, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()}); err == nil {
+		t.Fatal("ReapWith must refuse")
+	}
+	if _, err := r.TryGit(sub, "cat-file", "-e", sha+"^{commit}"); err != nil {
+		t.Errorf("the reflog commit must still exist: %v", err)
+	}
+}
