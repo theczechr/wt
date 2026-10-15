@@ -381,3 +381,54 @@ func TestReapRefusesWhenReopenedDuringTheRechecks(t *testing.T) {
 		t.Error("the worktree must survive:", err)
 	}
 }
+
+// The walk to the ending session may pass only through shells and wt itself.
+// If the first other ancestor is not recognisably claude -- a `node cli.js`
+// or a versioned binary with no session id -- nothing is exempt, so an outer
+// id-less claude further up in the same worktree cannot be mistaken for the
+// session that is ending.
+func TestBlockersExemptNothingWhenTheNearestNonShellAncestorIsUnrecognised(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/unrecognised-ancestor")
+	outer := startIdlessClaude(t, wt)
+	t.Cleanup(ephemeral.SetAncestorChainForTest(func(context.Context) ([]model.Proc, error) {
+		return []model.Proc{
+			{PID: 999998, Command: "/bin/sh -c wt reap"},
+			{PID: 999997, Command: "node /opt/lib/claude-code/cli.js"},
+			{PID: outer, Command: "claude"},
+		}, nil
+	}))
+	const ending = "11111111-1111-1111-1111-111111111111"
+	waitForBlocker(t, func() []string {
+		return ephemeral.BlockersExcluding(context.Background(), cfg, wt, ending)
+	}, "has a live Claude session")
+	if _, err := ephemeral.ReapWith(context.Background(), cfg, wt,
+		ephemeral.InspectOptions{ExcludeSessionID: ending, Now: time.Now()}); err == nil {
+		t.Fatal("ReapWith must refuse because of the outer claude")
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Error("the worktree must survive:", err)
+	}
+}
+
+// Shells, including login-shell forms, are walked through: the hook still
+// exempts its own claude behind sh -> -zsh.
+func TestBlockersExemptTheClaudeBehindShells(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/claude-behind-shells")
+	pid := startIdlessClaude(t, wt)
+	waitForBlocker(t, func() []string {
+		return ephemeral.Blockers(context.Background(), cfg, wt)
+	}, "has a live Claude session")
+	t.Cleanup(ephemeral.SetAncestorChainForTest(func(context.Context) ([]model.Proc, error) {
+		return []model.Proc{
+			{PID: 999998, Command: "/bin/sh -c wt reap"},
+			{PID: 999997, Command: "-zsh"},
+			{PID: pid, Command: "claude"},
+		}, nil
+	}))
+	const ending = "11111111-1111-1111-1111-111111111111"
+	if b := ephemeral.BlockersExcluding(context.Background(), cfg, wt, ending); blockersContain(b, "live Claude session") {
+		t.Errorf("the hook's own claude behind shells must be exempt, got %v", b)
+	}
+}

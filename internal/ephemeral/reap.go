@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -399,20 +400,48 @@ func Reap(ctx context.Context, cfg config.Config, worktree, excludeSessionID str
 // ancestorChain is swapped out in tests (export_test.go).
 var ancestorChain = discover.AncestorChain
 
-// nearestClaudeAncestor returns the pid of the closest ancestor of this
-// process that is a Claude process (with or without a session id), or 0
-// when there is none or the ancestry cannot be read.
+// nearestClaudeAncestor returns the pid of the Claude process that started
+// this one -- the session whose SessionEnd hook is running -- or 0.
+//
+// The walk goes up from wt's parent only through processes known to sit
+// between a hook and its session: shells and wt itself. The first ancestor
+// that is neither is the candidate, and it is returned only if it is a
+// Claude process (with or without a session id). Anything else returns 0:
+// taking the nearest ancestor merely RECOGNISED as claude would skip an
+// unrecognised ending session (a `node cli.js`, a versioned binary) and
+// exempt an outer live claude further up in the same worktree. A failed
+// ancestry read also returns 0, so nothing is exempt.
 func nearestClaudeAncestor(ctx context.Context) int {
 	chain, err := ancestorChain(ctx)
 	if err != nil {
 		return 0
 	}
 	for _, a := range chain {
+		if hookIntermediate(a.Command) {
+			continue
+		}
 		if _, isSession := discover.IsClaudeSession(a.Command); isSession || discover.IsClaudeProcess(a.Command) {
 			return a.PID
 		}
+		return 0
 	}
 	return 0
+}
+
+// hookIntermediate reports whether a command line is a process that may sit
+// between a SessionEnd hook's claude and this wt: a shell (including a
+// login shell's "-zsh" form) or wt itself.
+func hookIntermediate(cmd string) bool {
+	argv0, _, _ := strings.Cut(cmd, " ")
+	base := strings.TrimPrefix(filepath.Base(argv0), "-")
+	switch base {
+	case "sh", "bash", "zsh", "dash", "fish", "wt":
+		return true
+	}
+	if exe, err := os.Executable(); err == nil && base == filepath.Base(exe) {
+		return true
+	}
+	return false
 }
 
 // afterRechecks is a test seam: called after the liveness and cleanliness
