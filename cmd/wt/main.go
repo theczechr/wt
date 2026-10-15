@@ -194,13 +194,16 @@ func main() {
 		refresh := func() ([]model.Workspace, int) {
 			// Deliberately inside refresh, not on the launch path: PERF.md's
 			// whole point is that the first frame paints from a snapshot
-			// without waiting on git. Sweeping here costs the user nothing
-			// they can see. The sweep gets its own budget so a slow sweep
-			// (gh calls) cannot starve Collect.
-			sweepCtx, sweepCancel := context.WithTimeout(context.Background(), sweepTimeout)
-			_, _ = ephemeral.Sweep(sweepCtx, cfg, resolve.Primaries(cfg),
-				ephemeral.SweepOptions{Grace: ephemeral.DefaultSweepGrace})
-			sweepCancel()
+			// without waiting on git. The sweep runs in the background with
+			// its own budget, fire-and-forget, so a slow sweep (gh calls, up
+			// to sweepTimeout) never delays Collect; the sweep lock already
+			// turns an overlapping refresh's sweep into an ErrSweepBusy no-op.
+			go func() {
+				sweepCtx, sweepCancel := context.WithTimeout(context.Background(), sweepTimeout)
+				defer sweepCancel()
+				_, _ = ephemeral.Sweep(sweepCtx, cfg, resolve.Primaries(cfg),
+					ephemeral.SweepOptions{Grace: ephemeral.DefaultSweepGrace})
+			}()
 			ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
 			defer cancel()
 			return aggregate.Collect(ctx, cfg)
