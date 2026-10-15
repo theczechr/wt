@@ -3,12 +3,30 @@ package main
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/theczechr/ephemera/internal/config"
 	"github.com/theczechr/ephemera/internal/ephemeral"
 )
+
+// sweepEnv is env without the variables that point git at a specific
+// repository. A wt started from a git hook or alias inherits them, and they
+// override the `git -C <worktree>` every reap check runs.
+func sweepEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
 
 // spawnsSweep reports whether running cmd should kick a background sweep.
 // reap and hook ARE reaping; the dashboard ("") sweeps on its own refresh;
@@ -34,6 +52,7 @@ func maybeSpawnSweep(cfg config.Config, cmd string) {
 		return
 	}
 	c := exec.Command(exe, "reap", "--all", "--quiet")
+	c.Env = sweepEnv(os.Environ())
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if c.Start() == nil {
 		_ = c.Process.Release()
