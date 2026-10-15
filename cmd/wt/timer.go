@@ -26,7 +26,9 @@ func xmlEscape(s string) string {
 }
 
 // launchdPlist is the LaunchAgent that runs an hourly sweep (spec §3.3).
-func launchdPlist(exe string) string {
+// path is the PATH captured at install: launchd's default lacks
+// /opt/homebrew/bin, so without it the sweep cannot find gh.
+func launchdPlist(exe, path string) string {
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -40,6 +42,11 @@ func launchdPlist(exe string) string {
     <string>--all</string>
     <string>--quiet</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>` + xmlEscape(path) + `</string>
+  </dict>
   <key>StartInterval</key>
   <integer>3600</integer>
   <key>RunAtLoad</key>
@@ -53,9 +60,18 @@ func launchdPlist(exe string) string {
 // are expanded even inside double quotes, and `\` and `"` are C escapes.
 var systemdExecQuote = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `$$`, `%`, `%%`)
 
-func systemdService(exe string) string {
+// systemdEnvQuote escapes an Environment= value. Unlike ExecStart=, systemd
+// does not expand `$` there, so it stays literal; `%` specifiers and the
+// `\` and `"` C escapes still apply.
+var systemdEnvQuote = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`)
+
+// systemdService runs one sweep with the PATH captured at install, so the
+// sweep finds gh wherever the user's shell did.
+func systemdService(exe, path string) string {
 	return "[Unit]\nDescription=wt: reap finished ephemeral worktrees\n\n" +
-		"[Service]\nType=oneshot\nExecStart=\"" + systemdExecQuote.Replace(exe) + "\" reap --all --quiet\n"
+		"[Service]\nType=oneshot\n" +
+		"Environment=\"PATH=" + systemdEnvQuote.Replace(path) + "\"\n" +
+		"ExecStart=\"" + systemdExecQuote.Replace(exe) + "\" reap --all --quiet\n"
 }
 
 func systemdTimer() string {
@@ -65,10 +81,10 @@ func systemdTimer() string {
 }
 
 // writeLaunchAgent creates the LaunchAgents directory and writes the plist.
-func writeLaunchAgent(plistPath, exe string) error {
+func writeLaunchAgent(plistPath, exe, path string) error {
 	err := os.MkdirAll(filepath.Dir(plistPath), 0o755)
 	if err == nil {
-		err = os.WriteFile(plistPath, []byte(launchdPlist(exe)), 0o644)
+		err = os.WriteFile(plistPath, []byte(launchdPlist(exe, path)), 0o644)
 	}
 	return err
 }
@@ -102,7 +118,7 @@ func runTimer(args []string, stdout, stderr io.Writer) int {
 		domain := "gui/" + strconv.Itoa(os.Getuid())
 		switch args[0] {
 		case "install":
-			if err := writeLaunchAgent(plist, exe); err != nil {
+			if err := writeLaunchAgent(plist, exe, os.Getenv("PATH")); err != nil {
 				fmt.Fprintln(stderr, "wt: timer:", err)
 				return 1
 			}
@@ -136,7 +152,7 @@ func runTimer(args []string, stdout, stderr io.Writer) int {
 		case "install":
 			err := os.MkdirAll(dir, 0o755)
 			if err == nil {
-				err = os.WriteFile(svc, []byte(systemdService(exe)), 0o644)
+				err = os.WriteFile(svc, []byte(systemdService(exe, os.Getenv("PATH"))), 0o644)
 			}
 			if err == nil {
 				err = os.WriteFile(tmr, []byte(systemdTimer()), 0o644)
