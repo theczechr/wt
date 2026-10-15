@@ -33,6 +33,11 @@ type Verdict struct {
 // Decide applies spec §2.2. It is only consulted after every safety check
 // has passed; it decides "is this finished", never "is this safe".
 func Decide(f Facts) Verdict {
+	// A zero OpenedAt would make the grace check pass trivially and, with
+	// no newer sign of use, read as idle since year 1: fail open twice over.
+	if f.OpenedAt.IsZero() {
+		return Verdict{Reason: "marker has no created_at"}
+	}
 	if f.Grace > 0 {
 		if age := f.Now.Sub(f.OpenedAt); age < f.Grace {
 			return Verdict{Reason: fmt.Sprintf("opened %s ago (sweep grace %s)", age.Round(time.Second), f.Grace)}

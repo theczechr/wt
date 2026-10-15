@@ -31,6 +31,10 @@ func TestDecide(t *testing.T) {
 		{"grace beats everything", func(f *ephemeral.Facts) { f.Grace = 15 * time.Minute; f.OpenedAt = now.Add(-time.Minute) }, false, "grace"},
 		{"grace expired", func(f *ephemeral.Facts) { f.Grace = 15 * time.Minute; f.OpenedAt = now.Add(-16 * time.Minute) }, true, "no commits of your own"},
 		{"zero grace ignores a fresh worktree", func(f *ephemeral.Facts) { f.OpenedAt = now }, true, "no commits of your own"},
+		{"zero opened-at is never done", func(f *ephemeral.Facts) { f.OpenedAt = time.Time{} }, false, "marker has no created_at"},
+		{"zero opened-at beats grace and idle", func(f *ephemeral.Facts) {
+			f.OpenedAt, f.Grace, f.OwnCommits, f.LastUsed = time.Time{}, 15*time.Minute, 1, time.Time{}
+		}, false, "marker has no created_at"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
