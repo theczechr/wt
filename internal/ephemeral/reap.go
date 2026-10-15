@@ -415,6 +415,11 @@ func nearestClaudeAncestor(ctx context.Context) int {
 	return 0
 }
 
+// afterRechecks is a test seam: called after the liveness and cleanliness
+// rechecks, so a test can reopen the worktree in the slowest part of the
+// removal window.
+var afterRechecks = func(string) {}
+
 // beforeRemoval is a test seam: called right before the final liveness
 // re-probe, so a test can start a process inside the removal window.
 var beforeRemoval = func(string) {}
@@ -440,14 +445,6 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 		return d, fmt.Errorf("refusing to remove %s: %s", worktree, strings.Join(st.blockers, "; "))
 	}
 	beforeRemoval(worktree)
-	// The marker is re-read too. `wt <branch>` spawns its background sweep
-	// before it touches the marker at hand-off, so this sweep may have
-	// judged an old last_opened_at; and deleting the marker promotes the
-	// worktree to permanent, which must win even mid-reap.
-	if reason := reopenedReason(worktree, opts.Grace); reason != "" {
-		d.Reap, d.Reason = false, reason
-		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
-	}
 	if _, _, _, busy := probeLiveness(ctx, worktree, opts.ExcludeSessionID); len(busy) > 0 {
 		d.Reap, d.Reason = false, "became busy before removal: "+strings.Join(busy, "; ")
 		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
@@ -465,6 +462,17 @@ func ReapWith(ctx context.Context, cfg config.Config, worktree string, opts Insp
 		if n, err := unpushedCount(ctx, st.marker.Primary, st.marker.Branch); err != nil || n != 0 {
 			deleteBranch = false
 		}
+	}
+	afterRechecks(worktree)
+	// The marker is re-read last, after the slow rechecks above. `wt
+	// <branch>` spawns its background sweep before it touches the marker at
+	// hand-off, so this sweep may have judged an old last_opened_at; and
+	// deleting the marker promotes the worktree to permanent, which must win
+	// even mid-reap. Nothing slower than this read sits between it and the
+	// removal.
+	if reason := reopenedReason(worktree, opts.Grace); reason != "" {
+		d.Reap, d.Reason = false, reason
+		return d, fmt.Errorf("refusing to remove %s: %s", worktree, d.Reason)
 	}
 	ro := trash.RemoveOptions{Force: st.hasSubmodules, DeleteBranch: deleteBranch, PR: st.marker.PR}
 	if _, err := trash.SoftDeleteWith(ctx, st.ws, st.marker.Primary, ro); err != nil {

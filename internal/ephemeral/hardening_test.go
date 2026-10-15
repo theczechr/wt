@@ -357,3 +357,27 @@ func TestReapRefusesSubmoduleCommitReachableOnlyFromATag(t *testing.T) {
 		t.Errorf("the tagged commit must still exist: %v", err)
 	}
 }
+
+// The liveness and cleanliness rechecks fork ps, lsof and git and can take
+// seconds; a reopen landing while they run must still be caught, so the
+// marker re-read is the very last check before removal.
+func TestReapRefusesWhenReopenedDuringTheRechecks(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/reopened-late")
+	if err := ephemeral.UpdateMarker(wt, func(m *ephemeral.Marker) { m.CreatedAt = time.Now().Add(-time.Hour) }); err != nil {
+		t.Fatal(err)
+	}
+	restore := ephemeral.SetAfterRechecksForTest(func(string) {
+		if err := ephemeral.TouchOpened(wt, time.Now()); err != nil {
+			t.Errorf("TouchOpened: %v", err)
+		}
+	})
+	defer restore()
+	_, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Grace: ephemeral.DefaultSweepGrace})
+	if err == nil || !strings.Contains(err.Error(), "opened again before removal") {
+		t.Fatalf("err = %v, want an 'opened again before removal' refusal", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Error("the worktree must survive:", err)
+	}
+}

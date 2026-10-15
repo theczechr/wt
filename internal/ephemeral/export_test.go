@@ -54,3 +54,11 @@ func LiveSessionPIDsForTest(ctx context.Context, worktree, excludeSessionID stri
 	}
 	return pids
 }
+
+// SetAfterRechecksForTest installs a hook run in ReapWith after the liveness
+// and cleanliness rechecks and returns a function restoring the original.
+func SetAfterRechecksForTest(f func(worktree string)) (restore func()) {
+	old := afterRechecks
+	afterRechecks = f
+	return func() { afterRechecks = old }
+}
