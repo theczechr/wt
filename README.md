@@ -336,6 +336,11 @@ nothing unless the directory is an ephemeral worktree that is done and passes
 every check in "Cleanup". Payload shape verified against the hook documentation on 2026-08-13:
 `session_id`, `cwd`, `reason` and friends arrive as JSON on stdin.
 
+The ending session itself is still running while its hook runs, so it does
+not count as live: it is matched by the payload's `session_id`, or, when its
+command line names no session, by being the `claude` process that started
+the hook. Every other session in the worktree still blocks.
+
 The hook is not guaranteed to run after a crash or `kill -9`, which is why
 `wt` also sweeps in the background. Decisions are recorded in
 `~/.local/state/wt/reap.log`.
