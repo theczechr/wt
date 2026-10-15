@@ -142,10 +142,11 @@ func TestIsClaudeSessionMatchesRealCommandLines(t *testing.T) {
 		t.Errorf("id = %q", id)
 	}
 
-	// Pre-warmed spares must NOT count as sessions.
+	// A spare's command line carries no session id, so it is not a session
+	// by id; whether it is live is decided by IsClaudeProcess and its cwd.
 	spare := "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/3ff8a2c8/spare/3c3db37f.pty.sock 200 50 -- /Users/alice/.local/share/claude/versions/2.1.229 --bg-spare /tmp/cc-daemon-501/3ff8a2c8/spare/3c3db37f.claim.sock"
 	if _, ok := IsClaudeSession(spare); ok {
-		t.Error("--bg-spare process must not count as a live session")
+		t.Error("a spare's command line carries no session id")
 	}
 
 	if _, ok := IsClaudeSession("deno run -A foo.ts"); ok {

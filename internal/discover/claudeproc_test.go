@@ -34,7 +34,7 @@ func TestIsClaudeProcess(t *testing.T) {
 		"/Users/alice/.local/bin/claude --output-format stream-json --verbose":     true,
 		"/Users/alice/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude -x": true,
 		"node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume x":   true,
-		"claude bg-spare --bg-spare /tmp/cc-daemon-501/x/spare/y.claim.sock":       false,
+		"claude bg-spare --bg-spare /tmp/cc-daemon-501/x/spare/y.claim.sock":       true,
 		"corpclaude --session abc123":                                              false,
 		"/usr/bin/vim claude":                                                      false,
 		"node /Users/alice/.claude/plugins/claude-mem/mcp-server.cjs":              false,
@@ -46,21 +46,34 @@ func TestIsClaudeProcess(t *testing.T) {
 }
 
 // An id-less claude process must be resolved and surfaced, not dropped for
-// carrying no session id.
+// carrying no session id. A claimed --bg-spare is one; an unclaimed spare
+// sits under /tmp and is dropped like any /tmp process.
 func TestSnapshotErrRecordsIdlessClaudeProcesses(t *testing.T) {
 	fakeBin(t, "ps", `#!/bin/sh
 printf '  111 00:01 claude\n'
 printf '  222 00:02 claude bg-spare --bg-spare /tmp/x.claim.sock\n'
+printf '  333 00:03 claude bg-spare --bg-spare /tmp/y.claim.sock\n'
 `)
 	fakeBin(t, "lsof", `#!/bin/sh
-printf 'p1\nn/Users/alice/wt-a\n'
+pid=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-p" ]; then pid="$a"; fi
+  prev="$a"
+done
+case "$pid" in
+  111) printf 'p111\nn/Users/alice/wt-a\n' ;;
+  222) printf 'p222\nn/Users/alice/wt-b\n' ;;
+  *)   printf 'p333\nn/private/tmp/cc-daemon-501/x/spare\n' ;;
+esac
 `)
 	procs, err := SnapshotErr(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(procs.ClaudeProcs) != 1 || procs.ClaudeProcs[0].PID != 111 || procs.ClaudeProcs[0].Cwd != "/Users/alice/wt-a" {
-		t.Fatalf("ClaudeProcs = %+v, want exactly pid 111 in /Users/alice/wt-a", procs.ClaudeProcs)
+	if len(procs.ClaudeProcs) != 2 || procs.ClaudeProcs[0].PID != 111 || procs.ClaudeProcs[1].PID != 222 ||
+		procs.ClaudeProcs[1].Cwd != "/Users/alice/wt-b" {
+		t.Fatalf("ClaudeProcs = %+v, want pids 111 and 222 (the claimed spare), not the /tmp spare 333", procs.ClaudeProcs)
 	}
 	if len(procs.Procs) != 0 || len(procs.SessionProcs) != 0 {
 		t.Errorf("an id-less claude process belongs in ClaudeProcs only: %+v", procs)

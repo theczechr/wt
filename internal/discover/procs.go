@@ -25,15 +25,17 @@ var sessionIDRe = regexp.MustCompile(`--session-id[=\s]+([0-9a-f-]{36})`)
 var resumeIDRe = regexp.MustCompile(`--resume[=\s]+([0-9a-f-]{36})`)
 
 // IsClaudeSession reports whether a command line belongs to a real Claude
-// session, and extracts its session id. Pre-warmed --bg-spare processes are
-// excluded: their cwd is under /tmp and they belong to no worktree.
+// session, and extracts its session id.
 //
 // --session-id wins over --resume: with --fork-session the two differ, and
 // --session-id names the session actually running.
+//
+// Pre-warmed --bg-spare processes are deliberately NOT excluded here or in
+// IsClaudeProcess. A spare keeps --bg-spare on its command line after it is
+// claimed and becomes a user's live session, so excluding the flag hides
+// that session from the reap probe. Unclaimed spares are harmless without a
+// special case: they run under /tmp, which SnapshotErr already ignores.
 func IsClaudeSession(cmd string) (string, bool) {
-	if strings.Contains(cmd, "--bg-spare") {
-		return "", false
-	}
 	for _, re := range []*regexp.Regexp{sessionIDRe, resumeIDRe} {
 		if m := re.FindStringSubmatch(cmd); m != nil {
 			return m[1], true
@@ -44,14 +46,10 @@ func IsClaudeSession(cmd string) (string, bool) {
 
 // IsClaudeProcess reports whether a command line is a Claude Code process
 // at all, with or without a session id on it: an executable named claude,
-// or the npm package's entry point run by node. Pre-warmed --bg-spare
-// processes are excluded, as in IsClaudeSession. A plain interactive
-// `claude` carries no id on its command line, so this is what lets the reap
-// probe see it.
+// or the npm package's entry point run by node. A plain interactive
+// `claude`, or a claimed --bg-spare, carries no id on its command line, so
+// this is what lets the reap probe see it.
 func IsClaudeProcess(cmd string) bool {
-	if strings.Contains(cmd, "--bg-spare") {
-		return false
-	}
 	if strings.Contains(cmd, "@anthropic-ai/claude-code/") {
 		return true
 	}

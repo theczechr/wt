@@ -222,7 +222,8 @@ authored that exist on no remote.
 - A worktree with a live Claude session, or with a process `wt` recognises
   running in it. Any running `claude` process whose working directory is in
   the worktree counts as live, whether or not its command line names a
-  session (`--session-id` or `--resume`).
+  session (`--session-id` or `--resume`), including a pre-warmed
+  `--bg-spare` process once it has been claimed.
 - A worktree whose checked-out branch no longer matches the one it was
   created for.
 - A worktree locked with `git worktree lock`.

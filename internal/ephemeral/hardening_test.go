@@ -204,7 +204,7 @@ func TestReapRefusesWhenMarkerRemovedBeforeRemoval(t *testing.T) {
 
 // startIdlessClaude runs a sleeper binary named `claude`, with no session id
 // on its command line, in dir, and returns its pid.
-func startIdlessClaude(t *testing.T, dir string) int {
+func startIdlessClaude(t *testing.T, dir string, args ...string) int {
 	t.Helper()
 	build := t.TempDir()
 	src := filepath.Join(build, "main.go")
@@ -218,7 +218,7 @@ func startIdlessClaude(t *testing.T, dir string) int {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
-	c := exec.Command(bin)
+	c := exec.Command(bin, args...)
 	c.Dir = dir
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
@@ -310,5 +310,23 @@ func TestBlockersExemptsOnlyTheNearestClaudeAncestor(t *testing.T) {
 	}
 	if got := ephemeral.LiveSessionPIDsForTest(context.Background(), wt, ending); len(got) != 1 || got[0] != outer {
 		t.Errorf("live session pids = %v, want only the outer %d (inner %d is the ending session)", got, outer, inner)
+	}
+}
+
+// A claimed pre-warmed spare keeps --bg-spare on its command line and has no
+// session id, yet it IS the live session. Only unclaimed spares are harmless,
+// and those run under /tmp, which the process snapshot already ignores.
+func TestBlockersRefusesClaimedBgSpareInWorktree(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/claimed-spare")
+	startIdlessClaude(t, wt, "bg-spare", "--bg-spare", "/tmp/cc-daemon-501/x/spare/y.claim.sock")
+	waitForBlocker(t, func() []string {
+		return ephemeral.Blockers(context.Background(), cfg, wt)
+	}, "has a live Claude session")
+	if _, err := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{Now: time.Now()}); err == nil {
+		t.Fatal("ReapWith must refuse")
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Error("the worktree must survive:", err)
 	}
 }
