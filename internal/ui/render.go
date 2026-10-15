@@ -26,8 +26,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/theczechr/wt/internal/herdr"
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/herdr"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // kindRank orders workspaces so the user's own checkouts sort above

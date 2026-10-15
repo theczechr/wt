@@ -8,8 +8,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
-	"github.com/theczechr/wt/internal/model"
-	"github.com/theczechr/wt/internal/trash"
+	"github.com/theczechr/ephemera/internal/model"
+	"github.com/theczechr/ephemera/internal/trash"
 )
 
 // TestRenderRowExactWidthWhenStyled is the regression test this package's

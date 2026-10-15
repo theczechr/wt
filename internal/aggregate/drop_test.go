@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 func TestDropFromSnapshotRemovesOnlyTheNamedWorktree(t *testing.T) {

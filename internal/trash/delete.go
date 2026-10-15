@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/theczechr/wt/internal/bootstrap"
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/bootstrap"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // BlockedError reports that model.PruneBlockers refused a deletion attempt.

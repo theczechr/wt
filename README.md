@@ -1,4 +1,6 @@
-# wt
+# ephemera
+
+`wt` — worktrees that clean up after themselves.
 
 A dashboard over every git worktree across your repos, showing which
 Claude sessions and processes are running where, and bootstrapping new
@@ -12,7 +14,7 @@ automatically.
 1. Build and install the binary:
 
    ```bash
-   cd /Users/alice/code/wt
+   cd /Users/alice/code/ephemera
    make install
    ```
 

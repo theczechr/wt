@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/gittest"
-	"github.com/theczechr/wt/internal/resolve"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/gittest"
+	"github.com/theczechr/ephemera/internal/resolve"
 )
 
 func TestFindLocatesALocalBranch(t *testing.T) {

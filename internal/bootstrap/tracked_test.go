@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/config"
+	"github.com/theczechr/ephemera/internal/config"
 )
 
 // gitRepoWithFile builds a real git repo in dir containing one committed

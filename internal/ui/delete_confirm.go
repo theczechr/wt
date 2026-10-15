@@ -15,9 +15,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/theczechr/wt/internal/discover"
-	"github.com/theczechr/wt/internal/model"
-	"github.com/theczechr/wt/internal/trash"
+	"github.com/theczechr/ephemera/internal/discover"
+	"github.com/theczechr/ephemera/internal/model"
+	"github.com/theczechr/ephemera/internal/trash"
 )
 
 // confirmWindow is how long a second "d" is honoured as a confirmation

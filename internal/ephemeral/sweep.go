@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/theczechr/wt/internal/config"
+	"github.com/theczechr/ephemera/internal/config"
 )
 
 // Sweep removes every ephemeral worktree that passes the reap predicate,

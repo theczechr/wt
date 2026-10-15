@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // syntheticWorkspaces approximates the real fleet this was measured against:

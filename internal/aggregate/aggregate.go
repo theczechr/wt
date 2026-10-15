@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/theczechr/wt/internal/herdr"
+	"github.com/theczechr/ephemera/internal/herdr"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/discover"
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/discover"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 const prTTL = 10 * time.Minute

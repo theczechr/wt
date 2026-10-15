@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/theczechr/wt/internal/discover"
+	"github.com/theczechr/ephemera/internal/discover"
 )
 
 // Entry is one soft-deleted worktree recorded in the trash manifest.

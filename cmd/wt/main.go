@@ -13,15 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/theczechr/wt/internal/aggregate"
-	"github.com/theczechr/wt/internal/bootstrap"
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/ephemeral"
-	"github.com/theczechr/wt/internal/herdr"
-	"github.com/theczechr/wt/internal/model"
-	"github.com/theczechr/wt/internal/resolve"
-	"github.com/theczechr/wt/internal/trash"
-	"github.com/theczechr/wt/internal/ui"
+	"github.com/theczechr/ephemera/internal/aggregate"
+	"github.com/theczechr/ephemera/internal/bootstrap"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/ephemeral"
+	"github.com/theczechr/ephemera/internal/herdr"
+	"github.com/theczechr/ephemera/internal/model"
+	"github.com/theczechr/ephemera/internal/resolve"
+	"github.com/theczechr/ephemera/internal/trash"
+	"github.com/theczechr/ephemera/internal/ui"
 )
 
 // collectTimeout bounds the read-only paths: `status` and the interactive

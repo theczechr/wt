@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 func TestResumeSkipsT3SessionsForNewestTerminalOne(t *testing.T) {

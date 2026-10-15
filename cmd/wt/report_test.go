@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/bootstrap"
+	"github.com/theczechr/ephemera/internal/bootstrap"
 )
 
 // capture runs f with stderr redirected and returns what it wrote.

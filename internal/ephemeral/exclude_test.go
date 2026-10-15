@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/ephemeral"
-	"github.com/theczechr/wt/internal/gittest"
+	"github.com/theczechr/ephemera/internal/ephemeral"
+	"github.com/theczechr/ephemera/internal/gittest"
 )
 
 func TestEnsureExcludedMakesTheMarkerInvisibleToStatus(t *testing.T) {

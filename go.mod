@@ -1,4 +1,4 @@
-module github.com/theczechr/wt
+module github.com/theczechr/ephemera
 
 go 1.26.5
 

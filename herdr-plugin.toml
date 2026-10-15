@@ -5,7 +5,7 @@
 # of them.
 #
 # Install with `herdr plugin link <path-to-this-repo>` (or `herdr plugin
-# install theczechr/wt` once published). Requires `wt` on PATH.
+# install theczechr/ephemera` once published). Requires `wt` on PATH.
 
 id = "theczechr.wt"
 name = "wt"

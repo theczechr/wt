@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // ParseStatus counts changed files in `git status --porcelain` output.

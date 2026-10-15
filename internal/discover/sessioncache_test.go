@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // writeTranscript writes a minimal transcript whose last ai-title is

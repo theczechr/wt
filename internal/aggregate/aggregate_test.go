@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theczechr/wt/internal/model"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 func TestAttributeAssignsProcsToDeepestMatchingWorkspace(t *testing.T) {

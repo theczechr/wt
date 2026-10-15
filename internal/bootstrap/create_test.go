@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theczechr/wt/internal/bootstrap"
-	"github.com/theczechr/wt/internal/config"
-	"github.com/theczechr/wt/internal/gittest"
+	"github.com/theczechr/ephemera/internal/bootstrap"
+	"github.com/theczechr/ephemera/internal/config"
+	"github.com/theczechr/ephemera/internal/gittest"
 )
 
 func TestCreateAtChecksOutFromTheStartPointForARemoteOnlyBranch(t *testing.T) {
