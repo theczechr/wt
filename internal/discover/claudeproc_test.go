@@ -67,15 +67,17 @@ printf 'p1\nn/Users/alice/wt-a\n'
 	}
 }
 
-func TestAncestorPIDsIncludesTheParent(t *testing.T) {
-	got, err := AncestorPIDs(context.Background())
+func TestAncestorChainStartsAtTheParent(t *testing.T) {
+	got, err := AncestorChain(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got[os.Getppid()] {
-		t.Errorf("AncestorPIDs = %v, want it to contain the parent %d", got, os.Getppid())
+	if len(got) == 0 || got[0].PID != os.Getppid() || got[0].Command == "" {
+		t.Fatalf("AncestorChain = %+v, want it to start at the parent %d with its command", got, os.Getppid())
 	}
-	if got[os.Getpid()] {
-		t.Error("the process itself is not its own ancestor")
+	for _, p := range got {
+		if p.PID == os.Getpid() {
+			t.Error("the process itself is not its own ancestor")
+		}
 	}
 }

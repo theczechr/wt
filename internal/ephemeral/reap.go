@@ -335,25 +335,23 @@ func probeLiveness(ctx context.Context, worktree, excludeSessionID string) (sess
 	// against a transcript or exempt by name, so any one at or under this
 	// worktree counts as a live session. The single exception is the
 	// SessionEnd hook's own session: Claude runs the hook as its descendant
-	// and waits for it, so an id-less claude process that is an ancestor of
-	// this very process is the session that is ending. That exemption needs
-	// the hook's ending-session id to be set (sweeps and `wt reap <path>`
-	// never exempt anything), and a failed ancestor walk exempts nothing.
-	var ancestors map[int]bool
-	ancestorsRead := false
+	// and waits for it, so the NEAREST Claude process among this process's
+	// ancestors is the session that is ending. Only that one is exempt: an
+	// outer `claude` whose Bash tool started the ending one is still alive
+	// and still blocks. The exemption needs the hook's ending-session id to
+	// be set (sweeps and `wt reap <path>` never exempt anything), and a
+	// failed ancestor walk exempts nothing.
+	ending := 0
+	if excludeSessionID != "" && len(snap.ClaudeProcs) > 0 {
+		ending = nearestClaudeAncestor(ctx)
+	}
 	for _, p := range snap.ClaudeProcs {
 		pc := resolve(p.Cwd)
 		if pc != rw && !strings.HasPrefix(pc, rw+string(filepath.Separator)) {
 			continue
 		}
-		if excludeSessionID != "" {
-			if !ancestorsRead {
-				ancestors, _ = ancestorPIDs(ctx)
-				ancestorsRead = true
-			}
-			if ancestors[p.PID] {
-				continue
-			}
+		if ending != 0 && p.PID == ending {
+			continue
 		}
 		sessions = append(sessions, model.Session{Cwd: p.Cwd, Live: true, PID: p.PID})
 	}
@@ -398,8 +396,24 @@ func Reap(ctx context.Context, cfg config.Config, worktree, excludeSessionID str
 	return err
 }
 
-// ancestorPIDs is swapped out in tests (export_test.go).
-var ancestorPIDs = discover.AncestorPIDs
+// ancestorChain is swapped out in tests (export_test.go).
+var ancestorChain = discover.AncestorChain
+
+// nearestClaudeAncestor returns the pid of the closest ancestor of this
+// process that is a Claude process (with or without a session id), or 0
+// when there is none or the ancestry cannot be read.
+func nearestClaudeAncestor(ctx context.Context) int {
+	chain, err := ancestorChain(ctx)
+	if err != nil {
+		return 0
+	}
+	for _, a := range chain {
+		if _, isSession := discover.IsClaudeSession(a.Command); isSession || discover.IsClaudeProcess(a.Command) {
+			return a.PID
+		}
+	}
+	return 0
+}
 
 // beforeRemoval is a test seam: called right before the final liveness
 // re-probe, so a test can start a process inside the removal window.

@@ -3,6 +3,8 @@ package ephemeral
 import (
 	"context"
 	"testing"
+
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // SetPRStateLookupForTest swaps the gh-backed PR lookup for f and returns a
@@ -31,10 +33,24 @@ func HoldSweepLockForTest(t *testing.T) func() {
 	return release
 }
 
-// SetAncestorPIDsForTest swaps the ancestor-process lookup the SessionEnd
-// exemption uses and returns a function restoring the original.
-func SetAncestorPIDsForTest(f func(ctx context.Context) (map[int]bool, error)) (restore func()) {
-	old := ancestorPIDs
-	ancestorPIDs = f
-	return func() { ancestorPIDs = old }
+// SetAncestorChainForTest swaps the ordered (nearest-first) ancestor lookup
+// the SessionEnd exemption uses and returns a function restoring the
+// original.
+func SetAncestorChainForTest(f func(ctx context.Context) ([]model.Proc, error)) (restore func()) {
+	old := ancestorChain
+	ancestorChain = f
+	return func() { ancestorChain = old }
+}
+
+// LiveSessionPIDsForTest runs the liveness probe and returns the pids of the
+// live sessions it found.
+func LiveSessionPIDsForTest(ctx context.Context, worktree, excludeSessionID string) []int {
+	sessions, _, _, _ := probeLiveness(ctx, worktree, excludeSessionID)
+	var pids []int
+	for _, s := range sessions {
+		if s.Live {
+			pids = append(pids, s.PID)
+		}
+	}
+	return pids
 }

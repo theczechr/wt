@@ -338,8 +338,10 @@ every check in "Cleanup". Payload shape verified against the hook documentation 
 
 The ending session itself is still running while its hook runs, so it does
 not count as live: it is matched by the payload's `session_id`, or, when its
-command line names no session, by being the `claude` process that started
-the hook. Every other session in the worktree still blocks.
+command line names no session, by being the nearest `claude` process among
+the hook's ancestors (the one that started it). Every other session in the
+worktree still blocks, including an outer `claude` further up that chain
+whose own tool call started the ending one.
 
 The hook is not guaranteed to run after a crash or `kill -9`, which is why
 `wt` also sweeps in the background. Decisions are recorded in

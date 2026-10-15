@@ -12,6 +12,7 @@ import (
 
 	"github.com/theczechr/ephemera/internal/ephemeral"
 	"github.com/theczechr/ephemera/internal/gittest"
+	"github.com/theczechr/ephemera/internal/model"
 )
 
 // status.showUntrackedFiles=no hides untracked files from a plain
@@ -251,8 +252,8 @@ func TestBlockersExemptsIdlessClaudeOnlyAsTheHooksAncestor(t *testing.T) {
 		return ephemeral.Blockers(context.Background(), cfg, wt)
 	}, "has a live Claude session")
 
-	t.Cleanup(ephemeral.SetAncestorPIDsForTest(func(context.Context) (map[int]bool, error) {
-		return map[int]bool{pid: true}, nil
+	t.Cleanup(ephemeral.SetAncestorChainForTest(func(context.Context) ([]model.Proc, error) {
+		return []model.Proc{{PID: 999999, Command: "/bin/sh -c wt reap"}, {PID: pid, Command: "claude"}}, nil
 	}))
 	const ending = "11111111-1111-1111-1111-111111111111"
 	if b := ephemeral.BlockersExcluding(context.Background(), cfg, wt, ending); blockersContain(b, "live Claude session") {
@@ -262,10 +263,52 @@ func TestBlockersExemptsIdlessClaudeOnlyAsTheHooksAncestor(t *testing.T) {
 		t.Errorf("without an ending session nothing is exempt, got %v", b)
 	}
 
-	ephemeral.SetAncestorPIDsForTest(func(context.Context) (map[int]bool, error) {
+	ephemeral.SetAncestorChainForTest(func(context.Context) ([]model.Proc, error) {
 		return nil, errors.New("ps failed")
 	})
 	if b := ephemeral.BlockersExcluding(context.Background(), cfg, wt, ending); !blockersContain(b, "live Claude session") {
 		t.Errorf("a failed ancestor walk must exempt nothing, got %v", b)
+	}
+}
+
+// Only the NEAREST Claude ancestor is the session that is ending. An outer
+// interactive `claude` whose Bash tool ran an inner `claude -p` in the same
+// worktree is still alive when the inner one's hook fires, and must block.
+func TestBlockersExemptsOnlyTheNearestClaudeAncestor(t *testing.T) {
+	r := gittest.New(t)
+	cfg, wt := newEphemeral(t, r, "feat/nested-claude")
+	outer := startIdlessClaude(t, wt)
+	inner := startIdlessClaude(t, wt)
+	t.Cleanup(ephemeral.SetAncestorChainForTest(func(context.Context) ([]model.Proc, error) {
+		return []model.Proc{
+			{PID: 999998, Command: "/bin/sh -c wt reap"},
+			{PID: inner, Command: "claude -p fix the tests"},
+			{PID: 999999, Command: "/bin/zsh -c claude -p fix the tests"},
+			{PID: outer, Command: "claude"},
+		}, nil
+	}))
+	const ending = "11111111-1111-1111-1111-111111111111"
+	var b []string
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		b = ephemeral.BlockersExcluding(context.Background(), cfg, wt, ending)
+		if blockersContain(b, "live Claude session") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !blockersContain(b, "live Claude session") {
+		t.Fatalf("the outer claude ancestor must still block, got %v", b)
+	}
+	// And it is the outer one, not the inner one, that blocks.
+	d, _ := ephemeral.ReapWith(context.Background(), cfg, wt, ephemeral.InspectOptions{ExcludeSessionID: ending, Now: time.Now()})
+	if d.Reap {
+		t.Fatalf("ReapWith must refuse: %+v", d)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Error("the worktree must survive:", err)
+	}
+	if got := ephemeral.LiveSessionPIDsForTest(context.Background(), wt, ending); len(got) != 1 || got[0] != outer {
+		t.Errorf("live session pids = %v, want only the outer %d (inner %d is the ending session)", got, outer, inner)
 	}
 }

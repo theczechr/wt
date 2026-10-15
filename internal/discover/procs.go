@@ -59,26 +59,34 @@ func IsClaudeProcess(cmd string) bool {
 	return filepath.Base(argv0) == "claude"
 }
 
-// AncestorPIDs returns the pids of this process's parent, grandparent and
-// so on up to (not including) pid 1. A ps failure is an error, never a
-// partial answer: callers use the set to exempt processes from a delete
-// check.
-func AncestorPIDs(ctx context.Context) (map[int]bool, error) {
-	res := map[int]bool{}
+// AncestorChain returns this process's ancestors in order, nearest first:
+// its parent, grandparent and so on up to (not including) pid 1, each with
+// its command line. Order matters to the caller: the SessionEnd exemption
+// applies only to the NEAREST Claude ancestor. A ps failure is an error,
+// never a partial answer: callers use the chain to exempt a process from a
+// delete check.
+func AncestorChain(ctx context.Context) ([]model.Proc, error) {
+	var res []model.Proc
 	for pid, i := os.Getppid(), 0; pid > 1 && i < 64; i++ {
-		res[pid] = true
-		out, err := exec.CommandContext(ctx, "ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+		out, err := exec.CommandContext(ctx, "ps", "-o", "ppid=,command=", "-p", strconv.Itoa(pid)).Output()
 		if err != nil {
 			return nil, fmt.Errorf("ps -p %d: %w", pid, err)
 		}
-		next, err := strconv.Atoi(strings.TrimSpace(string(out)))
+		m := ancestorLineRe.FindStringSubmatch(strings.TrimRight(string(out), "\n"))
+		if m == nil {
+			return nil, fmt.Errorf("unreadable ps line for %d: %q", pid, out)
+		}
+		next, err := strconv.Atoi(m[1])
 		if err != nil {
 			return nil, fmt.Errorf("unreadable parent of %d %q: %w", pid, out, err)
 		}
+		res = append(res, model.Proc{PID: pid, Command: m[2]})
 		pid = next
 	}
 	return res, nil
 }
+
+var ancestorLineRe = regexp.MustCompile(`^\s*(\d+)\s+(.*)$`)
 
 var psLineRe = regexp.MustCompile(`^\s*(\d+)\s+(\S+)\s+(.*)$`)
 
