@@ -3,7 +3,9 @@ package discover
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -18,19 +20,71 @@ import (
 // latter and mark a live session idle.
 var sessionIDRe = regexp.MustCompile(`--session-id[=\s]+([0-9a-f-]{36})`)
 
+// resumeIDRe matches `--resume <uuid>`, the form T3 Code and the Agent SDK
+// launch sessions with. Same [=\s]+ reasoning as sessionIDRe.
+var resumeIDRe = regexp.MustCompile(`--resume[=\s]+([0-9a-f-]{36})`)
+
 // IsClaudeSession reports whether a command line belongs to a real Claude
-// session, and extracts its session id. Pre-warmed --bg-spare processes are
-// excluded: their cwd is under /tmp and they belong to no worktree.
+// session, and extracts its session id.
+//
+// --session-id wins over --resume: with --fork-session the two differ, and
+// --session-id names the session actually running.
+//
+// Pre-warmed --bg-spare processes are deliberately NOT excluded here or in
+// IsClaudeProcess. A spare keeps --bg-spare on its command line after it is
+// claimed and becomes a user's live session, so excluding the flag hides
+// that session from the reap probe. Unclaimed spares are harmless without a
+// special case: they run under /tmp, which SnapshotErr already ignores.
 func IsClaudeSession(cmd string) (string, bool) {
-	if strings.Contains(cmd, "--bg-spare") {
-		return "", false
+	for _, re := range []*regexp.Regexp{sessionIDRe, resumeIDRe} {
+		if m := re.FindStringSubmatch(cmd); m != nil {
+			return m[1], true
+		}
 	}
-	m := sessionIDRe.FindStringSubmatch(cmd)
-	if m == nil {
-		return "", false
-	}
-	return m[1], true
+	return "", false
 }
+
+// IsClaudeProcess reports whether a command line is a Claude Code process
+// at all, with or without a session id on it: an executable named claude,
+// or the npm package's entry point run by node. A plain interactive
+// `claude`, or a claimed --bg-spare, carries no id on its command line, so
+// this is what lets the reap probe see it.
+func IsClaudeProcess(cmd string) bool {
+	if strings.Contains(cmd, "@anthropic-ai/claude-code/") {
+		return true
+	}
+	argv0, _, _ := strings.Cut(cmd, " ")
+	return filepath.Base(argv0) == "claude"
+}
+
+// AncestorChain returns this process's ancestors in order, nearest first:
+// its parent, grandparent and so on up to (not including) pid 1, each with
+// its command line. Order matters to the caller: the SessionEnd exemption
+// applies only to the NEAREST Claude ancestor. A ps failure is an error,
+// never a partial answer: callers use the chain to exempt a process from a
+// delete check.
+func AncestorChain(ctx context.Context) ([]model.Proc, error) {
+	var res []model.Proc
+	for pid, i := os.Getppid(), 0; pid > 1 && i < 64; i++ {
+		out, err := exec.CommandContext(ctx, "ps", "-o", "ppid=,command=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil {
+			return nil, fmt.Errorf("ps -p %d: %w", pid, err)
+		}
+		m := ancestorLineRe.FindStringSubmatch(strings.TrimRight(string(out), "\n"))
+		if m == nil {
+			return nil, fmt.Errorf("unreadable ps line for %d: %q", pid, out)
+		}
+		next, err := strconv.Atoi(m[1])
+		if err != nil {
+			return nil, fmt.Errorf("unreadable parent of %d %q: %w", pid, out, err)
+		}
+		res = append(res, model.Proc{PID: pid, Command: m[2]})
+		pid = next
+	}
+	return res, nil
+}
+
+var ancestorLineRe = regexp.MustCompile(`^\s*(\d+)\s+(.*)$`)
 
 var psLineRe = regexp.MustCompile(`^\s*(\d+)\s+(\S+)\s+(.*)$`)
 
@@ -146,6 +200,12 @@ type Processes struct {
 	// without changing what Procs/Live/SessionProcs themselves contain --
 	// see delete_confirm.go's unresolvedProcsWarning.
 	UnresolvedCwds int
+	// ClaudeProcs is every Claude Code process (IsClaudeProcess) whose
+	// command line carries no session id, with its resolved cwd, sorted by
+	// pid. Kept apart from SessionProcs because there is no id to match
+	// against a transcript or exempt by; the reap probe treats each one in a
+	// worktree as a live session.
+	ClaudeProcs []model.Proc
 }
 
 // Snapshot returns all processes with a resolved cwd, plus a map from Claude
@@ -180,15 +240,17 @@ func SnapshotErr(ctx context.Context) (Processes, error) {
 		proc      model.Proc
 		id        string
 		isSession bool
+		isClaude  bool
 	}
 	var candidates []candidate
 	for _, p := range ParsePS(string(out)) {
 		id, isSession := IsClaudeSession(p.Command)
+		isClaude := !isSession && IsClaudeProcess(p.Command)
 		// Only resolve cwd for plausible candidates; lsof is the slow part.
-		if !isSession && !interesting(p.Command) {
+		if !isSession && !isClaude && !interesting(p.Command) {
 			continue
 		}
-		candidates = append(candidates, candidate{proc: p, id: id, isSession: isSession})
+		candidates = append(candidates, candidate{proc: p, id: id, isSession: isSession, isClaude: isClaude})
 	}
 
 	// Each goroutine writes only to its own index, so no shared state needs
@@ -231,12 +293,17 @@ func SnapshotErr(ctx context.Context) (Processes, error) {
 			res.SessionProcs = append(res.SessionProcs, SessionProc{Proc: p, SessionID: c.id})
 			continue
 		}
+		if c.isClaude {
+			res.ClaudeProcs = append(res.ClaudeProcs, p)
+			continue
+		}
 		res.Procs = append(res.Procs, p)
 	}
 	// Concurrency reorders completion, but the TUI must not reshuffle rows
 	// between refreshes: sort deterministically by PID before returning.
 	sort.Slice(res.Procs, func(i, j int) bool { return res.Procs[i].PID < res.Procs[j].PID })
 	sort.Slice(res.SessionProcs, func(i, j int) bool { return res.SessionProcs[i].PID < res.SessionProcs[j].PID })
+	sort.Slice(res.ClaudeProcs, func(i, j int) bool { return res.ClaudeProcs[i].PID < res.ClaudeProcs[j].PID })
 	return res, nil
 }
 

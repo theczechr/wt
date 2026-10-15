@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"time"
 )
 
 // SessionEnd is the payload Claude Code writes to a SessionEnd hook's stdin.
@@ -69,30 +66,4 @@ func WorktreeRoot(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("%s is not inside a git worktree: %w", dir, err)
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-// LogReap appends one line to the reap log. A SessionEnd hook's stderr
-// reaches only the session transcript and its exit code is ignored, so
-// without this a refusal -- the interesting case -- would leave no trace
-// anywhere the user looks.
-func LogReap(worktree string, err error) {
-	home, homeErr := os.UserHomeDir()
-	if homeErr != nil {
-		return
-	}
-	dir := filepath.Join(home, ".local", "state", "wt")
-	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
-		return
-	}
-	f, openErr := os.OpenFile(filepath.Join(dir, "reap.log"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if openErr != nil {
-		return
-	}
-	defer f.Close()
-	outcome := "reaped"
-	if err != nil {
-		outcome = err.Error()
-	}
-	fmt.Fprintf(f, "%s\t%s\t%s\n", time.Now().Format(time.RFC3339), worktree, outcome)
 }

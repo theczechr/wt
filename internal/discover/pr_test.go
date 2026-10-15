@@ -46,3 +46,21 @@ func TestPRCacheRoundTripAndExpiry(t *testing.T) {
 		t.Error("expired cache must miss")
 	}
 }
+
+// gh lists newest first. A reused branch name must resolve to its OPEN PR,
+// never to an old CLOSED one listed after it.
+func TestParsePRListPrefersOpenThenNewest(t *testing.T) {
+	got := ParsePRList([]byte(`[
+	  {"number":9,"headRefName":"feat/reused","state":"OPEN"},
+	  {"number":5,"headRefName":"feat/reused","state":"CLOSED"},
+	  {"number":3,"headRefName":"feat/old","state":"MERGED"},
+	  {"number":12,"headRefName":"feat/old","state":"CLOSED"},
+	  {"number":7,"headRefName":"feat/old","state":"MERGED"}
+	]`))
+	if pr := got["feat/reused"]; pr.Number != 9 || pr.State != "OPEN" {
+		t.Errorf("feat/reused = %+v, want the OPEN #9", pr)
+	}
+	if pr := got["feat/old"]; pr.Number != 12 || pr.State != "CLOSED" {
+		t.Errorf("feat/old = %+v, want the newest #12", pr)
+	}
+}

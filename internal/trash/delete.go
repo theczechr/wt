@@ -24,6 +24,22 @@ func (e *BlockedError) Error() string {
 	return "refusing to delete: " + strings.Join(e.Blockers, "; ")
 }
 
+// RemoveOptions extends SoftDelete for the unattended reaper.
+type RemoveOptions struct {
+	// Force passes exactly one --force to `git worktree remove`. git refuses
+	// to remove a worktree with initialized submodules without it; callers
+	// set it only after proving the worktree and its submodules clean. One
+	// --force never overrides a lock (that takes two).
+	Force bool
+	// DeleteBranch deletes the local branch with `git branch -D` after the
+	// worktree is gone. -D, not -d: -d refuses a branch unmerged into HEAD,
+	// which a fork PR branch always is. The caller's proof that every commit
+	// is on a remote is the safety gate.
+	DeleteBranch bool
+	// PR is recorded in the trash entry so Restore can fetch it again.
+	PR int
+}
+
 // SoftDelete is the default deletion mode. `git worktree remove` -- never
 // --force, so git's own refusal on uncommitted changes stays a second,
 // independent safety layer under PruneBlockers -- removes the checkout and
@@ -41,23 +57,62 @@ func (e *BlockedError) Error() string {
 // checkouts, dirty worktrees, live sessions and running processes are all
 // refused here before any git command runs.
 func SoftDelete(ctx context.Context, ws model.Workspace, primary string) (Entry, error) {
+	return SoftDeleteWith(ctx, ws, primary, RemoveOptions{})
+}
+
+// SoftDeleteWith is SoftDelete with RemoveOptions. PruneBlockers is still
+// consulted first and still the only gate in this package.
+func SoftDeleteWith(ctx context.Context, ws model.Workspace, primary string, opts RemoveOptions) (Entry, error) {
 	if blockers := ws.PruneBlockers(); len(blockers) > 0 {
 		return Entry{}, &BlockedError{Blockers: blockers}
 	}
-	if out, err := exec.CommandContext(ctx, "git", "-C", primary, "worktree", "remove", ws.Path).CombinedOutput(); err != nil {
+	args := []string{"-C", primary, "worktree", "remove"}
+	if opts.Force {
+		args = append(args, "--force")
+	}
+	args = append(args, ws.Path)
+	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
 		return Entry{}, fmt.Errorf("git worktree remove: %w: %s", err, bytes.TrimSpace(out))
 	}
 	e := Entry{
-		Path:      ws.Path,
-		Repo:      ws.Repo,
-		Branch:    ws.Branch,
-		Primary:   primary,
-		DeletedAt: time.Now(),
+		Path: ws.Path, Repo: ws.Repo, Branch: ws.Branch, Primary: primary,
+		DeletedAt: time.Now(), PR: opts.PR,
+	}
+	if opts.DeleteBranch {
+		// A failed delete leaves the branch: the safe outcome, so not an error.
+		if exec.CommandContext(ctx, "git", "-C", primary, "branch", "-D", ws.Branch).Run() == nil {
+			e.BranchDeleted = true
+		}
 	}
 	if err := Add(e); err != nil {
 		return e, fmt.Errorf("worktree removed but failed to record a trash entry: %w", err)
 	}
 	return e, nil
+}
+
+// recreateBranch fetches a branch that SoftDeleteWith deleted. A PR entry
+// comes back from refs/pull/<n>/head (works for fork and same-repo PRs);
+// anything else from the remote branch of the same name. A branch that
+// already exists is left as it is, so a Restore that failed after creating
+// it (or a branch recreated by hand) can be retried.
+func recreateBranch(ctx context.Context, e Entry, remote string) error {
+	if exec.CommandContext(ctx, "git", "-C", e.Primary, "show-ref", "--verify", "--quiet", "refs/heads/"+e.Branch).Run() == nil {
+		return nil
+	}
+	from := remote + "/" + e.Branch
+	fetch := []string{"-C", e.Primary, "fetch", "-q", remote, e.Branch}
+	if e.PR > 0 {
+		from = model.PRRemoteRef(e.PR)
+		fetch = []string{"-C", e.Primary, "fetch", "-q", remote,
+			fmt.Sprintf("+refs/pull/%d/head:%s", e.PR, from)}
+	}
+	if out, err := exec.CommandContext(ctx, "git", fetch...).CombinedOutput(); err != nil {
+		return fmt.Errorf("fetching %s again: %w: %s", e.Branch, err, bytes.TrimSpace(out))
+	}
+	if out, err := exec.CommandContext(ctx, "git", "-C", e.Primary, "branch", e.Branch, from).CombinedOutput(); err != nil {
+		return fmt.Errorf("recreating branch %s: %w: %s", e.Branch, err, bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 // HardDeleteResult reports what happened to the branch after a hard
@@ -115,6 +170,11 @@ func Restore(ctx context.Context, e Entry, repoCfg config.Repo) error {
 		return fmt.Errorf("refusing to restore: %s already exists", e.Path)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("refusing to restore: %s: %w", e.Path, err)
+	}
+	if e.BranchDeleted {
+		if err := recreateBranch(ctx, e, repoCfg.RemoteOrDefault()); err != nil {
+			return fmt.Errorf("refusing to restore: %w", err)
+		}
 	}
 	if out, err := exec.CommandContext(ctx, "git", "-C", e.Primary, "worktree", "add", e.Path, e.Branch).CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree add: %w: %s", err, bytes.TrimSpace(out))

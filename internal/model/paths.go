@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,3 +40,9 @@ func ClaudeProjectsDir() string {
 	}
 	return filepath.Join(home, ".claude", "projects")
 }
+
+// PRRemoteRef is where wt keeps a fetched pull request head:
+// refs/remotes/wt-pr/<n>. Under refs/remotes so `--not --remotes` counts the
+// PR's commits as pushed; under a namespace that is not a configured remote
+// so `git fetch --prune` never deletes it.
+func PRRemoteRef(n int) string { return fmt.Sprintf("refs/remotes/wt-pr/%d", n) }

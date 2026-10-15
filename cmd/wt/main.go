@@ -56,6 +56,8 @@ func main() {
 		cmd = os.Args[1]
 	}
 
+	maybeSpawnSweep(cfg, cmd)
+
 	switch cmd {
 	case "status":
 		// defer would run at the end of main, not the end of this case --
@@ -152,53 +154,11 @@ func main() {
 		}
 		fmt.Println(target)
 	case "reap":
-		// reap does mutate -- Reap can reach `git worktree remove` and a
-		// trash-manifest write -- but collectTimeout is still the right
-		// budget, not mutateTimeout: mutateTimeout's 15 minutes is sized for
-		// a cold submodule clone plus post_create installs, which is absurd
-		// here. A reap is one `git worktree remove` and a small manifest
-		// write, both fast, and it runs from a SessionEnd hook, so it must
-		// not hang a session's exit.
-		ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
-		defer cancel()
-		target := ""
-		// endingSession is the one session Reap must not count as live. A
-		// SessionEnd hook runs while its own session is still alive -- Claude
-		// forks this process and waits for it -- so `ps` reports that session
-		// and, without naming it here, every hook-driven reap would refuse
-		// itself. Empty for `wt reap <path>`, where no session is ending.
-		endingSession := ""
-		if len(os.Args) > 2 {
-			target = os.Args[2]
-		} else {
-			// No argument means hook mode: the SessionEnd payload arrives on
-			// stdin.
-			ev, err := ephemeral.ParseSessionEnd(os.Stdin)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "wt: reap:", err)
-				os.Exit(1)
-			}
-			if !ephemeral.ShouldReap(ev.Reason) {
-				return
-			}
-			target, endingSession = ev.Cwd, ev.SessionID
-		}
-		root, err := ephemeral.WorktreeRoot(ctx, target)
-		if err != nil {
-			// Not an error worth an exit code: the hook fires for every
-			// session, most of which are nowhere near an ephemeral worktree.
-			return
-		}
-		if _, err := ephemeral.ReadMarker(root); err != nil {
-			return // not one of ours; say nothing
-		}
-		err = ephemeral.Reap(ctx, cfg, root, endingSession)
-		ephemeral.LogReap(root, err)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "wt: reap:", err)
-			os.Exit(1)
-		}
-		fmt.Println("reaped", root)
+		os.Exit(runReap(cfg, os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	case "hooks":
+		os.Exit(runHooks(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	case "timer":
+		os.Exit(runTimer(os.Args[2:], os.Stdout, os.Stderr))
 	case "":
 		// Trash expiry runs before the TUI paints anything: it only ever
 		// drops manifest records for worktrees `git worktree remove`
@@ -232,13 +192,20 @@ func main() {
 				time.Since(snapshotLoadStart), needsRefresh)
 		}
 		refresh := func() ([]model.Workspace, int) {
-			ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
-			defer cancel()
 			// Deliberately inside refresh, not on the launch path: PERF.md's
 			// whole point is that the first frame paints from a snapshot
-			// without waiting on git. Sweeping here costs the user nothing
-			// they can see.
-			ephemeral.Sweep(ctx, cfg, resolve.Primaries(cfg))
+			// without waiting on git. The sweep runs in the background with
+			// its own budget, fire-and-forget, so a slow sweep (gh calls, up
+			// to sweepTimeout) never delays Collect; the sweep lock already
+			// turns an overlapping refresh's sweep into an ErrSweepBusy no-op.
+			go func() {
+				sweepCtx, sweepCancel := context.WithTimeout(context.Background(), sweepTimeout)
+				defer sweepCancel()
+				_, _ = ephemeral.Sweep(sweepCtx, cfg, resolve.Primaries(cfg),
+					ephemeral.SweepOptions{Grace: ephemeral.DefaultSweepGrace})
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
+			defer cancel()
 			return aggregate.Collect(ctx, cfg)
 		}
 		ops := ui.TrashOps{
@@ -248,7 +215,7 @@ func main() {
 			Restore: makeRestoreFunc(cfg),
 			Purge:   func(e trash.Entry) error { return trash.Remove(e) },
 		}
-		path, action, session, err := ui.Run(ws, needsRefresh, unresolvedProcs, refresh, ops)
+		path, action, session, err := ui.Run(ws, needsRefresh, unresolvedProcs, refresh, ops, func() int { return countOrphans(cfg) })
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "wt:", err)
 			os.Exit(1)
@@ -279,6 +246,8 @@ func main() {
 			os.Exit(2)
 		}
 		openAndCd(cfg, os.Args[2])
+	case "branches":
+		os.Exit(runBranches(cfg, os.Args[2:], os.Stdout, os.Stderr))
 	case "help", "-h", "--help":
 		// Asking for help is not a usage error: it goes to stdout so it can be
 		// piped or paged, and exits 0 so `wt --help && ...` works. The default
@@ -293,13 +262,19 @@ func main() {
 			fmt.Fprintln(os.Stderr, usage)
 			os.Exit(2)
 		}
+		if ref, ok := parsePRArg(cmd); ok {
+			openPRAndCd(cfg, ref)
+			return
+		}
 		openAndCd(cfg, cmd)
 	}
 }
 
 // usage is the one-line summary printed by `wt help` and by the unknown
 // -reserved-word failure path.
-const usage = "usage: wt [status|new|bootstrap|reap|hook <name>|open <branch>|<branch>]"
+const usage = "usage: wt [status|new|bootstrap|open <branch>|<branch>|<PR>|" +
+	"reap [<path>|--all] [--dry-run] [--json]|hooks install claude|timer install|uninstall|status|" +
+	"branches --unpushed|hook <name>]"
 
 // nonNilWorkspaces normalises a nil slice to an empty one. wt status is a
 // scripting interface, and encoding/json marshals a nil slice as `null`,
@@ -350,6 +325,7 @@ func writeChoice(path, sessionID string) {
 // owning the pty there was no way to reach a session running in another
 // terminal, and focusing herdr's workspace is exactly that.
 func handOff(path, sessionID string) {
+	touchIfEphemeral(path)
 	if !herdr.InPluginPane() {
 		writeChoice(path, sessionID)
 		return
@@ -381,7 +357,8 @@ func handOff(path, sessionID string) {
 // of these is still reachable.
 var reservedCommands = map[string]bool{
 	"status": true, "new": true, "bootstrap": true, "reap": true,
-	"open": true, "hook": true, "help": true, "-h": true, "--help": true,
+	"open": true, "hook": true, "hooks": true, "timer": true, "branches": true,
+	"help": true, "-h": true, "--help": true,
 }
 
 func isReservedCommand(arg string) bool { return reservedCommands[arg] }
@@ -477,24 +454,53 @@ func openOrCreateBranch(cfg config.Config, repoName, branch string) (string, err
 	if err := bootstrap.CreateAt(ctx, primary, target, branch, base, r.ForEphemeral()); err != nil {
 		return "", fmt.Errorf("bootstrapping %s: %w (left in place for you to inspect or remove)", target, err)
 	}
+	start, err := headOf(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("created %s but %w", target, err)
+	}
 	if err := ephemeral.WriteMarker(target, ephemeral.Marker{
 		Repo: repoName, Branch: branch, Primary: primary, CreatedAt: time.Now(),
+		Start: start,
+		// The user asked for a brand-new branch; it holds their work.
+		BranchCreatedByWT: false,
 	}); err != nil {
 		return "", fmt.Errorf("created %s but could not mark it ephemeral: %w", target, err)
 	}
 	return target, nil
 }
 
+// headOf returns the commit dir's HEAD points at.
+func headOf(ctx context.Context, dir string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("reading HEAD of %s: %w", dir, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// touchIfEphemeral records that the user is being handed path, when path
+// is a wt ephemeral. Best effort: a failure only means the idle clock
+// starts from an older signal.
+func touchIfEphemeral(path string) {
+	if _, err := ephemeral.ReadMarker(path); err == nil {
+		_ = ephemeral.TouchOpened(path, time.Now())
+	}
+}
+
 // openBranch resolves branch to a worktree, creating an ephemeral one when
 // nothing has it checked out, and returns the path to cd into.
 func openBranch(cfg config.Config, branch string) (string, error) {
+	return openBranchIn(cfg, resolve.Primaries(cfg), branch)
+}
+
+// openBranchIn is openBranch with the primaries already resolved.
+func openBranchIn(cfg config.Config, primaries map[string]string, branch string) (string, error) {
 	if err := resolve.ValidBranchName(branch); err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mutateTimeout)
 	defer cancel()
 
-	primaries := resolve.Primaries(cfg)
 	if len(primaries) == 0 {
 		return "", fmt.Errorf("no configured repo found under any scan root %v", cfg.ScanRoots)
 	}
@@ -508,7 +514,8 @@ func openBranch(cfg config.Config, branch string) (string, error) {
 	switch {
 	case len(matches) == 0:
 		return "", fmt.Errorf("branch %q not found in any of %v (after fetching).\n"+
-			"If you meant a subcommand, the reserved words are: status, new, bootstrap, reap, open",
+			"If you meant a subcommand, the reserved words are: status, new, bootstrap, reap, open, hooks, timer, branches. "+
+			"A number opens a PR; use `wt open <name>` for a branch named like one.",
 			branch, repoNames(primaries))
 	case len(matches) > 1:
 		var err error
@@ -563,11 +570,19 @@ func openBranch(cfg config.Config, branch string) (string, error) {
 	}
 	// Only after a successful bootstrap: a half-set-up worktree is left for
 	// the user to inspect rather than being silently collected later.
+	start, err := headOf(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("created %s but %w", target, err)
+	}
 	if err := ephemeral.WriteMarker(target, ephemeral.Marker{
 		Repo:      m.Repo,
 		Branch:    branch,
 		Primary:   m.Primary,
 		CreatedAt: time.Now(),
+		Start:     start,
+		// A remote-only branch gets its local copy from wt here; a local
+		// branch is the user's own.
+		BranchCreatedByWT: !m.Local,
 	}); err != nil {
 		return "", fmt.Errorf("created %s but could not mark it ephemeral: %w", target, err)
 	}

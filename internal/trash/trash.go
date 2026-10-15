@@ -27,6 +27,11 @@ type Entry struct {
 	Branch    string    `json:"branch"`
 	Primary   string    `json:"primary"`
 	DeletedAt time.Time `json:"deleted_at"`
+	// PR is the pull request the worktree was opened for, if any.
+	PR int `json:"pr,omitempty"`
+	// BranchDeleted is true when the removal also deleted the local branch
+	// (spec §4.2); Restore then fetches it again.
+	BranchDeleted bool `json:"branch_deleted,omitempty"`
 }
 
 // Age returns a short, human-readable age string ("just now", "3h", "31d")
