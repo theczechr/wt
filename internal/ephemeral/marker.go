@@ -48,14 +48,32 @@ type Marker struct {
 	LastOpenedAt time.Time `json:"last_opened_at,omitzero"`
 }
 
-// WriteMarker records m in the worktree root.
+// WriteMarker records m in the worktree root. It writes a temp file in the
+// same directory and renames it over the marker, so a concurrent reader (a
+// sweep deciding whether to delete) sees the old marker or the new one,
+// never a truncated one.
 func WriteMarker(worktree string, m Marker) error {
 	m.Version = markerVersion
 	body, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(worktree, MarkerName), append(body, '\n'), 0o600)
+	f, err := os.CreateTemp(worktree, MarkerName+".tmp-*") // mode 0600
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(append(body, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, filepath.Join(worktree, MarkerName))
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
 }
 
 // ReadMarker loads the marker from a worktree root. Every failure mode --

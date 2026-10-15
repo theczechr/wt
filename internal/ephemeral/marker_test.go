@@ -3,6 +3,7 @@ package ephemeral_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,5 +155,43 @@ func TestTouchOpenedUpgradesV1KeepingStartEmpty(t *testing.T) {
 func TestTouchOpenedOnUnmarkedDirIsAnError(t *testing.T) {
 	if err := ephemeral.TouchOpened(t.TempDir(), time.Now()); err == nil {
 		t.Error("touching a directory without a marker must fail, never create one")
+	}
+}
+
+// WriteMarker must replace the marker atomically (temp file + rename): a
+// reader -- a concurrent sweep -- must see the old marker or the new one,
+// never a truncated one. A hard link to the old file proves the write went
+// to a new inode instead of truncating the old one in place.
+func TestWriteMarkerReplacesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	m := ephemeral.Marker{Repo: "demo", Branch: "feat/a", Primary: "/p", CreatedAt: time.Now()}
+	if err := ephemeral.WriteMarker(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ephemeral.MarkerName)
+	old := filepath.Join(t.TempDir(), "old-marker")
+	if err := os.Link(path, old); err != nil {
+		t.Fatal(err)
+	}
+	m.Branch = "feat/b"
+	if err := ephemeral.WriteMarker(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	if body, _ := os.ReadFile(old); !strings.Contains(string(body), "feat/a") {
+		t.Errorf("the old marker was rewritten in place:\n%s", body)
+	}
+	if got, err := ephemeral.ReadMarker(dir); err != nil || got.Branch != "feat/b" {
+		t.Errorf("ReadMarker = %+v, %v; want branch feat/b", got, err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", st.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("leftover files beside the marker: %v", entries)
 	}
 }
