@@ -63,7 +63,7 @@ automatically.
    | Key | Default | Purpose |
    | --- | --- | --- |
    | `idle_days` | `3` | default for every repo; a `[repo.X]` value overrides it |
-   | `reap_trigger_interval` | `"10m"` | minimum gap between the background sweeps that any `wt` command may start |
+   | `reap_trigger_interval` | `"10m"` | minimum gap between the background sweeps that `wt` commands start (see "Triggers") |
 
    See
    `docs/superpowers/specs/2026-08-13-worktree-dashboard-design.md` for the
@@ -136,8 +136,10 @@ do `wt '#1234'` (quote it in zsh, where `#` starts a comment) and a full PR
 URL. A bare number or `#number` is always a PR; use `wt open 1234` for a
 branch that is actually named `1234`.
 
-A bare number uses the repo containing the current directory. A URL picks
-the configured repo whose `origin` matches it. `wt` asks `gh` for the PR, so
+A bare number uses the repo containing the current directory. Outside any
+configured repo it asks which repo to use, or, when there is no terminal to
+ask on, exits with a hint listing the configured repos (pass the PR URL
+instead). A URL picks the configured repo whose `origin` matches it. `wt` asks `gh` for the PR, so
 `gh` must be installed and authenticated.
 
 - A PR from the same repository opens its branch, exactly like `wt <branch>`.
@@ -196,7 +198,9 @@ remove.
 ### When a worktree is done
 
 Your own commits are the ones on the worktree's branch, made since wt created
-it, whose author email matches `git config user.email`.
+it, whose author email matches `git config user.email` (ignoring case). With
+no `user.email` set, every commit counts as yours, so worktrees are kept
+longer rather than removed early.
 
 - **No commits of your own** (a review): done as soon as it is safe to remove.
 - **Commits of your own**: done once it is safe to remove and either the
@@ -210,12 +214,23 @@ authored that exist on no remote.
 ### What is never removed
 
 - A worktree with uncommitted or untracked changes, including inside its
-  submodules.
+  submodules. Untracked files are checked even with
+  `status.showUntrackedFiles=no`.
+- A worktree whose submodules hold commits that exist on no remote. A
+  submodule's commits live inside the worktree's git dir, so removal would
+  delete the only copy.
 - A worktree with a live Claude session, or with a process `wt` recognises
-  running in it.
+  running in it. Any running `claude` process whose working directory is in
+  the worktree counts as live, whether or not its command line names a
+  session (`--session-id` or `--resume`).
+- A worktree whose checked-out branch no longer matches the one it was
+  created for.
 - A worktree locked with `git worktree lock`.
 - Your primary checkouts, hand-made siblings, worktrees from `wt new`, and
-  any worktree whose marker is gone.
+  any worktree whose marker is gone or unreadable.
+- Anything `wt` cannot read. A git status, lock state, session list, process
+  list or submodule check that fails blocks removal; it is never taken to
+  mean "nothing there".
 
 The live-process check only looks at the keywords the dashboard's process
 pane uses — `deno`, `node`, `supabase`, `psql`, `docker`, `go run`, `vite`,
@@ -225,8 +240,9 @@ it and will not block removal. Their output (`target/`, `.pytest_cache/`) is
 usually gitignored, so it doesn't dirty the tree either, and it goes with the
 worktree.
 
-Liveness and cleanliness are checked again immediately before removal, so a
-session opened mid-sweep still saves the worktree. A worktree with
+Liveness, cleanliness, unpushed submodule commits and the marker are checked
+again immediately before removal, so a session opened mid-sweep, or a
+worktree you reopened while a sweep was deciding about it, is kept. A worktree with
 initialized submodules is removed with a single `git worktree remove
 --force`, which git requires for submodules; the checks above are what make
 that safe, and a lock is never overridden.
@@ -258,8 +274,9 @@ wt reap --all --dry-run          # one reap/keep line with a reason per worktree
 wt reap --all --dry-run --json   # the same, for scripting
 ```
 
-Nothing is deleted. Real decisions are also appended to
-`~/.local/state/wt/reap.log` with their reason.
+Nothing is deleted. A dry run also lists each directory in the ephemeral dir
+that has no usable marker, with the reason it is never removed. Real
+decisions are appended to `~/.local/state/wt/reap.log` with their reason.
 
 ### Triggers
 
@@ -268,12 +285,16 @@ Nothing is deleted. Real decisions are also appended to
   It shows what it will add and asks first (`--yes` skips the question; the
   previous file is saved as `settings.json.wt-backup`). See "Wiring the
   `SessionEnd` hook" below.
-- Any `wt` command may start a detached background `wt reap --all`, at most
-  once per `reap_trigger_interval` (default `10m`). The command you ran never
-  waits for it. Two sweeps never run at once.
+- Any `wt` command except `reap`, `hook` (the plugin entry points), `timer`
+  and `help` may start a detached background `wt reap --all`, at most once
+  per `reap_trigger_interval` (default `10m`). The command you ran never
+  waits for it. The dashboard does not start one; it sweeps in the background
+  on each refresh instead. Two sweeps never run at once.
 - `wt timer install` adds an hourly `wt reap --all`: a launchd agent on macOS,
   a systemd user timer on Linux. It is optional, but it is the only trigger
-  that fires `idle_days` for a worktree nobody touches again.
+  that fires `idle_days` for a worktree nobody touches again. It runs with
+  the `PATH` you had when you installed it, so it finds `gh` wherever your
+  shell did; reinstall after moving `gh`.
   `wt timer status` and `wt timer uninstall` do what they say.
 
 ### Unpushed work
