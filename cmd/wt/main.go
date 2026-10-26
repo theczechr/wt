@@ -525,15 +525,29 @@ func openBranchIn(cfg config.Config, primaries map[string]string, branch string)
 		}
 	}
 	m := matches[0]
+	r := cfg.Repos[m.Repo]
+
+	// Find matched against whatever refs the last fetch left, which can be
+	// days old. Refresh the one branch being opened so every path below
+	// starts from the remote's current tip. A branch with no remote-tracking
+	// ref is usually local-only, so a failed fetch there is expected and not
+	// worth a line on stderr.
+	remote := m.Remote
+	if remote == "" {
+		remote = r.RemoteOrDefault()
+	}
+	if err := refreshBranch(ctx, m.Primary, remote, branch); err != nil && m.Remote != "" {
+		fmt.Fprintf(os.Stderr, "wt: could not fetch %s/%s, opening the local copy: %v\n", remote, branch, err)
+	}
 
 	// Git allows a branch in only one worktree, so an existing checkout is
 	// not merely a shortcut -- creating another would fail. It is also the
 	// case the user hits most: the branch is already open somewhere.
 	if m.ExistingWorktree != "" {
+		fastForward(ctx, m.ExistingWorktree, remote, branch, os.Stderr)
 		return m.ExistingWorktree, nil
 	}
 
-	r := cfg.Repos[m.Repo]
 	if !r.EphemeralEnabled() {
 		return "", fmt.Errorf("repo %q has ephemeral = false; use `wt new %s %s` to create a permanent worktree",
 			m.Repo, m.Repo, branch)
@@ -554,6 +568,13 @@ func openBranchIn(cfg config.Config, primaries map[string]string, branch string)
 			return "", fmt.Errorf("branch %q in %s has neither a local nor a remote ref", branch, m.Repo)
 		}
 		startPoint = m.Remote + "/" + branch
+	} else {
+		// A pre-existing local branch is checked out as it stands, which may
+		// be behind the remote. It is checked out nowhere (ExistingWorktree
+		// is empty), so its ref can move without touching any working tree --
+		// and moving it before `worktree add` means post_create installs
+		// against the code the user will actually run.
+		fastForwardRef(ctx, m.Primary, remote, branch, os.Stderr)
 	}
 
 	// Written before the worktree exists so the primary's status is never
